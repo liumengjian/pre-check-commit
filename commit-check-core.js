@@ -18,10 +18,31 @@ const { execSync } = require('child_process');
 
 // 加载配置
 let config;
-try {
-  config = require('./commit-check.config.js');
-} catch (e) {
+
+// 尝试从多个位置加载配置文件
+const configPaths = [
+  path.join(process.cwd(), 'commit-check.config.js'), // 项目根目录
+  path.join(__dirname, 'commit-check.config.js'), // 包目录
+  path.resolve(__dirname, '../commit-check.config.js') // 包目录（相对路径）
+];
+
+let configLoaded = false;
+for (const configPath of configPaths) {
+  if (fs.existsSync(configPath)) {
+    try {
+      config = require(configPath);
+      configLoaded = true;
+      break;
+    } catch (e) {
+      // 继续尝试下一个路径
+    }
+  }
+}
+
+if (!configLoaded) {
   console.error(chalk.red('❌ 无法加载配置文件 commit-check.config.js'));
+  console.error(chalk.yellow('💡 请确保项目根目录存在 commit-check.config.js 配置文件'));
+  console.error(chalk.yellow('   或在项目根目录执行: cp node_modules/pre-commit-check/commit-check.config.js .'));
   process.exit(1);
 }
 

@@ -11,7 +11,59 @@
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 方式一：作为 npm 包安装（推荐）
+
+#### 1. 安装包
+
+```bash
+npm install prina-pre-commit-check --save-dev
+# 或
+yarn add prina-pre-commit-check -D
+```
+
+#### 2. 自动配置
+
+安装完成后，`prepare` 脚本会自动执行，完成以下操作：
+- 安装 husky
+- 配置 pre-commit hook
+- 创建默认配置文件（如果不存在）
+
+如果自动配置失败，可以手动执行：
+
+```bash
+npm run prepare
+# 或
+npx prina-pre-commit-check --init
+```
+
+#### 3. 配置检查规则
+
+编辑项目根目录下的 `commit-check.config.js` 文件，根据项目需求配置：
+- 启用/禁用指定检查规则
+- 配置白名单文件/目录
+- 自定义关键词（方法名、组件名等）
+
+#### 4. 测试
+
+执行 Git 提交时，会自动触发检查：
+
+```bash
+git add .
+git commit -m "test: 测试提交"
+```
+
+### 方式二：本地开发模式
+
+如果你想在本地开发或修改此工具：
+
+#### 1. 克隆或下载项目
+
+```bash
+git clone <repository-url>
+cd pre-check-commit
+```
+
+#### 2. 安装依赖
 
 ```bash
 npm install
@@ -19,7 +71,7 @@ npm install
 yarn install
 ```
 
-### 2. 初始化 Git 钩子
+#### 3. 初始化 Git 钩子
 
 ```bash
 npm run prepare
@@ -29,22 +81,6 @@ yarn prepare
 
 这将自动安装 husky 并配置 pre-commit 钩子。
 
-### 3. 配置检查规则
-
-编辑 `commit-check.config.js` 文件，根据项目需求配置：
-
-- 启用/禁用指定检查规则
-- 配置白名单文件/目录
-- 自定义关键词（方法名、组件名等）
-
-### 4. 测试
-
-执行 Git 提交时，会自动触发检查：
-
-```bash
-git add .
-git commit -m "test: 测试提交"
-```
 
 ## ⚙️ 配置说明
 
@@ -220,6 +256,85 @@ git commit -m "test: 测试规则1通过"
 - `rule3-violation.js` / `rule3-pass.js` - 规则3测试用例
 - `rule4-violation.vue` / `rule4-pass.vue` - 规则4测试用例
 
+## 📦 在其他项目中使用
+
+### 安装步骤
+
+1. **安装 npm 包**
+
+```bash
+npm install prina-pre-commit-check --save-dev
+# 或
+yarn add prina-pre-commit-check -D
+```
+
+2. **自动配置**
+
+安装后会自动执行 `prepare` 脚本，完成 husky 和 git hook 的配置。如果自动配置失败，可以手动执行：
+
+```bash
+npm run prepare
+```
+
+3. **配置文件**
+
+工具会在项目根目录创建 `commit-check.config.js` 配置文件（如果不存在）。你可以根据项目需求修改配置。
+
+4. **开始使用**
+
+配置完成后，每次执行 `git commit` 时会自动触发代码检查。
+
+### 手动配置（可选）
+
+如果自动配置失败，可以手动配置：
+
+1. **安装 husky**
+
+```bash
+npx husky install
+```
+
+2. **创建 pre-commit hook**
+
+```bash
+# Windows (PowerShell)
+echo "npx pre-commit-check" > .husky/pre-commit
+
+# Linux/Mac
+echo "npx pre-commit-check" > .husky/pre-commit
+chmod +x .husky/pre-commit
+```
+
+3. **复制配置文件**
+
+```bash
+# Windows (PowerShell)
+Copy-Item node_modules/prina-pre-commit-check/commit-check.config.js .
+
+# Linux/Mac
+cp node_modules/prina-pre-commit-check/commit-check.config.js .
+```
+
+### 卸载
+
+如果需要卸载此工具：
+
+```bash
+# 1. 卸载 npm 包
+npm uninstall prina-pre-commit-check
+# 或
+yarn remove prina-pre-commit-check
+
+# 2. 删除配置文件（可选）
+# Windows
+del commit-check.config.js
+# Linux/Mac
+rm commit-check.config.js
+
+# 3. 删除或修改 .husky/pre-commit hook（可选）
+# 编辑 .husky/pre-commit，删除或注释掉 "npx pre-commit-check" 这一行
+```
+
 ## 📦 依赖说明
 
 ### 核心依赖
@@ -230,7 +345,7 @@ git commit -m "test: 测试规则1通过"
 - `chalk`: 终端颜色输出
 - `glob`: 文件匹配
 
-### 开发依赖
+### 开发依赖（仅开发此工具时需要）
 
 - `husky`: Git 钩子管理
 - `lint-staged`: 仅检查暂存区文件

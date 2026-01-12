@@ -4,3 +4,5 @@
 # 直接执行核心检查逻辑
 node commit-check-core.js
 
+
+npx pre-commit-check

@@ -1,0 +1,31 @@
+# 测试文件
+test/
+*.test.js
+*.spec.js
+
+# 开发文件
+.git/
+.gitignore
+.husky/
+*.log
+*.md
+!README.md
+!USAGE.md
+
+# 开发依赖
+node_modules/
+package-lock.json
+yarn.lock
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 其他
+.DS_Store
+.env
+.env.local
+

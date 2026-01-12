@@ -1,17 +1,31 @@
 {
-  "name": "pre-commit-check",
+  "name": "prina-pre-commit-check",
   "version": "1.0.0",
   "description": "Git pre-commit hook for frontend code quality checks",
   "main": "commit-check-core.js",
+  "bin": {
+    "pre-commit-check": "bin/pre-commit-check.js"
+  },
+  "files": [
+    "bin",
+    "commit-check-core.js",
+    "commit-check.config.js",
+    "lint-staged.config.js",
+    "README.md",
+    "USAGE.md"
+  ],
   "scripts": {
-    "prepare": "husky install",
-    "test": "node test/test-runner.js"
+    "prepare": "node bin/install.js",
+    "test": "node test/test-runner.js",
+    "prepublishOnly": "npm test"
   },
   "keywords": [
     "pre-commit",
     "git-hook",
     "code-quality",
-    "lint"
+    "lint",
+    "husky",
+    "code-review"
   ],
   "author": "",
   "license": "MIT",
@@ -28,6 +42,9 @@
   },
   "engines": {
     "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
   }
 }
-

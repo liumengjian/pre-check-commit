@@ -1,0 +1,33 @@
+{
+  "name": "pre-commit-check",
+  "version": "1.0.0",
+  "description": "Git pre-commit hook for frontend code quality checks",
+  "main": "commit-check-core.js",
+  "scripts": {
+    "prepare": "husky install",
+    "test": "node test/test-runner.js"
+  },
+  "keywords": [
+    "pre-commit",
+    "git-hook",
+    "code-quality",
+    "lint"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/parser": "^7.23.0",
+    "@babel/traverse": "^7.23.0",
+    "@babel/types": "^7.23.0",
+    "chalk": "^4.1.2",
+    "glob": "^10.3.10"
+  },
+  "devDependencies": {
+    "husky": "^8.0.3",
+    "lint-staged": "^15.2.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
+

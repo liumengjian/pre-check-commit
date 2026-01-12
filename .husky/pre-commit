@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# 直接执行核心检查逻辑
+node commit-check-core.js
+

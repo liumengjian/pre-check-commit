@@ -1,11 +1,12 @@
 /**
  * Git Pre-Commit 核心检查逻辑
  * 
- * 实现4项核心检查规则：
+ * 实现5项核心检查规则：
  * 1. 新增按钮接口调用防重复提交检查
  * 2. 新增列表/详情页首次进入 loading 检查
  * 3. 接口操作成功后轻提示检查
  * 4. 非 Table 组件列表空状态自定义检查
+ * 5. 表单输入项默认提示检查
  */
 
 const fs = require('fs');
@@ -158,42 +159,123 @@ function parseHTMLFile(content) {
 }
 
 /**
+ * 移除注释内容
+ */
+function removeComments(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
+    .replace(/\/\/.*$/gm, ''); // 移除 // 注释
+}
+
+/**
+ * 检查是否是新增文件
+ */
+function isNewFile(diff) {
+  return !diff || !diff.includes('---') || (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
+}
+
+/**
+ * 检查 diff 中是否包含新增的组件
+ */
+function isNewlyAddedInDiff(diff, componentName, isNewFile) {
+  if (isNewFile) return true;
+  if (!diff) return false;
+  
+  const diffLines = diff.split('\n');
+  for (let i = 0; i < diffLines.length; i++) {
+    const line = diffLines[i];
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      if (line.includes(componentName) && line.includes('<')) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * 转义正则表达式特殊字符
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * 检查规则1：新增按钮接口调用防重复提交检查
  */
 function checkRule1(filePath, parsed, diff) {
   if (!config.rule1.enabled) return null;
 
   const errors = [];
-  const { type, ast, template = '', content } = parsed;
+  const { ast, template = '', content } = parsed;
 
   // 检查是否在 diff 中新增了按钮，或者检查所有按钮（如果文件是新增的）
-  const isNewFile = !diff || !diff.includes('---') || (diff && diff.split('\n').filter(l => l.startsWith('+++')).length > 0);
-  const hasNewButton = diff && diff.includes('+') && (diff.includes('button') || diff.includes('Button') || diff.includes('@click') || diff.includes('onClick'));
+  const fileIsNew = isNewFile(diff);
+  const hasNewButton = diff && diff.includes('+') && (
+    diff.includes('button') || 
+    diff.includes('Button') || 
+    diff.includes('@click') || 
+    diff.includes('onClick') ||
+    diff.includes('onOk') ||
+    diff.includes('onConfirm') ||
+    diff.includes('onFinish') ||
+    diff.includes('htmlType') ||
+    diff.includes('Modal') ||
+    diff.includes('Drawer') ||
+    diff.includes('Popconfirm') ||
+    diff.includes('Form')
+  );
 
   // 如果既不是新文件，也没有新增按钮，则跳过检查
-  if (!isNewFile && !hasNewButton) {
+  if (!fileIsNew && !hasNewButton) {
     return null;
   }
 
-  // 提取按钮和点击事件
+  // 提取按钮和点击事件（包括 Modal、Drawer、Form 等组件的确认按钮）
   const buttonPatterns = [
     /<button[^>]*onclick=["']([^"']+)["'][^>]*>/gi,
     /<button[^>]*@click=["']([^"']+)["'][^>]*>/gi,
     /<ElButton[^>]*@click=["']([^"']+)["'][^>]*>/gi,
-    /<Button[^>]*onClick=\{([^}]+)\}[^>]*>/gi
+    /<Button[^>]*onClick=\{([^}]+)\}[^>]*>/gi,
+    // Modal、Drawer 等组件的 onOk 属性（支持多行）
+    /<Modal[\s\S]*?onOk\s*=\s*\{([^}]+)\}/gi,
+    /<Drawer[\s\S]*?onOk\s*=\s*\{([^}]+)\}/gi,
+    /<Popconfirm[\s\S]*?onConfirm\s*=\s*\{([^}]+)\}/gi,
+    // Form 组件的 onFinish 属性（支持多行）
+    /<Form[\s\S]*?onFinish\s*=\s*\{([^}]+)\}/gi
   ];
 
   const handlers = new Set();
+  const contentWithoutComments = removeComments(content);
 
-  // 如果是新文件，检查整个文件内容
-  if (isNewFile) {
+  // 如果是新文件，检查整个文件内容（跳过注释）
+  if (fileIsNew) {
+    // 直接在原始内容中匹配，但检查是否在注释中
     for (const pattern of buttonPatterns) {
       pattern.lastIndex = 0;
       let match;
       while ((match = pattern.exec(content)) !== null) {
-        const handlerName = match[1].trim().replace(/['"]/g, '').replace(/\(\)/g, '');
-        const lineNum = content.substring(0, match.index).split('\n').length;
-        handlers.add({ name: handlerName, line: lineNum });
+        const matchStart = match.index;
+        const beforeMatch = content.substring(0, matchStart);
+        
+        // 检查是否在多行注释中
+        const lastMultiCommentStart = beforeMatch.lastIndexOf('/*');
+        const lastMultiCommentEnd = beforeMatch.lastIndexOf('*/');
+        const isInMultiComment = lastMultiCommentStart > lastMultiCommentEnd;
+        
+        // 检查是否在单行注释中
+        const linesBeforeMatch = beforeMatch.split('\n');
+        const currentLine = linesBeforeMatch[linesBeforeMatch.length - 1];
+        const commentStartInLine = currentLine.indexOf('//');
+        const matchStartInLine = matchStart - (beforeMatch.lastIndexOf('\n') + 1);
+        const isInSingleComment = commentStartInLine !== -1 && commentStartInLine < matchStartInLine;
+        
+        // 如果不在注释中，才添加handler
+        if (!isInMultiComment && !isInSingleComment) {
+          const handlerName = match[1].trim().replace(/['"]/g, '').replace(/\(\)/g, '');
+          const lineNum = linesBeforeMatch.length;
+          handlers.add({ name: handlerName, line: lineNum });
+        }
       }
     }
   } else if (hasNewButton && diff) {
@@ -218,11 +300,15 @@ function checkRule1(filePath, parsed, diff) {
       }
     }
 
-    // 检查新增的行中是否包含按钮
+    // 检查新增的行中是否包含按钮（移除注释后）
     for (const addedLine of addedLines) {
+      const lineWithoutComments = removeComments(addedLine.content);
+      // 如果移除注释后内容为空，说明整行都是注释，跳过
+      if (!lineWithoutComments.trim()) continue;
+      
       for (const pattern of buttonPatterns) {
         pattern.lastIndex = 0; // 重置正则
-        const match = pattern.exec(addedLine.content);
+        const match = pattern.exec(lineWithoutComments);
         if (match) {
           const handlerName = match[1].trim().replace(/['"]/g, '').replace(/\(\)/g, '');
           handlers.add({ name: handlerName, line: addedLine.line });
@@ -231,7 +317,8 @@ function checkRule1(filePath, parsed, diff) {
     }
   }
 
-  // 检查每个处理函数
+  // 检查每个处理函数（对同一个handler只检查一次）
+  const checkedHandlers = new Set(); // 记录已经检查过的handler名称
   if (ast && handlers.size > 0) {
     traverse(ast, {
       FunctionDeclaration(path) {
@@ -245,7 +332,11 @@ function checkRule1(filePath, parsed, diff) {
             handlerName.includes(funcName) ||
             funcName.toLowerCase() === handlerName.toLowerCase() ||
             handlerName.toLowerCase().includes(funcName.toLowerCase())) {
-            checkHandlerForRule1(path, handler, errors, filePath, parsed);
+            // 对同一个handler只检查一次
+            if (!checkedHandlers.has(handlerName)) {
+              checkedHandlers.add(handlerName);
+              checkHandlerForRule1(path, handler, errors, filePath, parsed);
+            }
           }
         });
       },
@@ -258,13 +349,18 @@ function checkRule1(filePath, parsed, diff) {
             if (funcName === handlerName ||
               handlerName.includes(funcName) ||
               funcName.toLowerCase() === handlerName.toLowerCase()) {
-              checkHandlerForRule1(path, handler, errors, filePath, parsed);
+              // 对同一个handler只检查一次
+              if (!checkedHandlers.has(handlerName)) {
+                checkedHandlers.add(handlerName);
+                checkHandlerForRule1(path, handler, errors, filePath, parsed);
+              }
             }
           });
         }
       },
       ArrowFunctionExpression(path) {
         const parent = path.parent;
+        // 支持 const onSave = () => {} 和 const onSave = async () => {}
         if (parent && t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           const funcName = parent.id.name;
           handlers.forEach(handler => {
@@ -272,7 +368,11 @@ function checkRule1(filePath, parsed, diff) {
             if (funcName === handlerName ||
               handlerName.includes(funcName) ||
               funcName.toLowerCase() === handlerName.toLowerCase()) {
-              checkHandlerForRule1(path, handler, errors, filePath, parsed);
+              // 对同一个handler只检查一次
+              if (!checkedHandlers.has(handlerName)) {
+                checkedHandlers.add(handlerName);
+                checkHandlerForRule1(path, handler, errors, filePath, parsed);
+              }
             }
           });
         }
@@ -287,7 +387,11 @@ function checkRule1(filePath, parsed, diff) {
           if (funcName === handlerName ||
             handlerName.includes(funcName) ||
             funcName.toLowerCase() === handlerName.toLowerCase()) {
-            checkHandlerForRule1(path, handler, errors, filePath, parsed);
+            // 对同一个handler只检查一次
+            if (!checkedHandlers.has(handlerName)) {
+              checkedHandlers.add(handlerName);
+              checkHandlerForRule1(path, handler, errors, filePath, parsed);
+            }
           }
         });
       }
@@ -755,7 +859,57 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
   if (!hasProtection && hasApiCall) {
     // 查找函数中的所有接口调用
     let foundDeclareRequestLoading = false;
-    path.traverse({
+    let foundModalOrDrawerWithoutLoading = false; // 标记是否找到 Modal/Drawer/Form 但没有 loading
+    
+    // 先检查是否有 Modal/Drawer/Form 但没有 loading（在遍历接口调用之前）
+    const handlerName = handler.name.replace(/['"()]/g, '').trim();
+    const templateContent = parsed.template || parsed.content || '';
+    const fullContent = parsed.content || '';
+    
+    // 移除注释后检查
+    const contentWithoutComments = removeComments(fullContent);
+    
+    // 检查 Modal/Drawer/Form 是否有 onOk/onFinish 但没有 loading
+    // 这里先不检查具体的 loading 名称，只检查是否有这些组件但没有 loading
+    const modalMatch = contentWithoutComments.match(new RegExp(`<Modal[\\s\\S]*?</Modal>`, 'i'));
+    if (modalMatch) {
+      const modalContent = modalMatch[0];
+      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapeRegExp(handlerName)}`, 'i').test(modalContent);
+      if (hasOnOk && !new RegExp(`confirmLoading=\\{[^}]+\\}`, 'i').test(modalContent)) {
+        foundModalOrDrawerWithoutLoading = true;
+      }
+    }
+    
+    const drawerMatch = contentWithoutComments.match(new RegExp(`<Drawer[\\s\\S]*?</Drawer>`, 'i'));
+    if (drawerMatch) {
+      const drawerContent = drawerMatch[0];
+      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapeRegExp(handlerName)}`, 'i').test(drawerContent);
+      if (hasOnOk && !new RegExp(`confirmLoading=\\{[^}]+\\}`, 'i').test(drawerContent)) {
+        foundModalOrDrawerWithoutLoading = true;
+      }
+    }
+    
+    const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
+    if (formMatch) {
+      const formContent = formMatch[0];
+      const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapeRegExp(handlerName)}`, 'i').test(formContent);
+      if (hasOnFinish) {
+        // Form 的 loading 可能在 Form 组件上，也可能在提交按钮上
+        const hasFormLoading = new RegExp(`loading=\\{[^}]+\\}`, 'i').test(formContent);
+        const hasSubmitButtonLoading = new RegExp(`htmlType=["']submit["'][\\s\\S]*?loading=\\{[^}]+\\}`, 'i').test(formContent) ||
+          new RegExp(`loading=\\{[^}]+\\}[\\s\\S]*?htmlType=["']submit["']`, 'i').test(formContent);
+        
+        if (!hasFormLoading && !hasSubmitButtonLoading) {
+          foundModalOrDrawerWithoutLoading = true;
+        }
+      }
+    }
+    
+    // 如果找到了 Modal/Drawer/Form 但没有 loading，直接返回，不再检查其他方式
+    // 注意：这里不设置 hasProtection，让外层逻辑判定为没有保护
+    if (!foundModalOrDrawerWithoutLoading) {
+      // 只有在没有找到 Modal/Drawer/Form 但没有 loading 的情况下，才继续检查接口调用
+      path.traverse({
       CallExpression(apiCallPath) {
         if (isApiCall(apiCallPath)) {
           const actionName = getActionNameFromCall(apiCallPath);
@@ -768,18 +922,117 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
             }
             
             if (declareRequestInfo && declareRequestInfo.loadingName) {
-              // 检查页面中是否使用了这个 loading（在按钮上绑定）
+              // 检查页面中是否使用了这个 loading（在按钮或 Modal/Drawer 上绑定）
               const handlerName = handler.name.replace(/['"()]/g, '').trim();
               // 对于 JSX 文件，template 可能是 undefined，使用 content
               const templateContent = parsed.template || parsed.content || '';
               const fullContent = parsed.content || '';
               
-              // 检查按钮是否绑定了这个 loading
-              const buttonLoadingPattern = new RegExp(`<Button[^>]*onClick.*${handlerName}[^>]*loading=\\{([^}]*\\b${declareRequestInfo.loadingName}\\b[^}]*)\\}`, 'i');
-              const buttonLoadingPattern2 = new RegExp(`<Button[^>]*loading=\\{([^}]*\\b${declareRequestInfo.loadingName}\\b[^}]*)\\}[^>]*onClick.*${handlerName}`, 'i');
+              // 移除注释后检查
+              const contentWithoutComments = removeComments(fullContent);
+              const templateWithoutComments = removeComments(templateContent);
               
-              if (buttonLoadingPattern.test(templateContent) || 
-                  buttonLoadingPattern2.test(templateContent) ||
+              // 转义特殊字符
+              const escapedLoadingName = escapeRegExp(declareRequestInfo.loadingName);
+              const escapedHandlerName = escapeRegExp(handlerName);
+              
+              // 先检查 Modal/Drawer/Popconfirm，如果它们有 onOk/onConfirm 但没有 loading，则没有保护
+              // 检查 Modal 是否绑定了 confirmLoading（支持多行，不关心顺序）
+              const modalMatch = contentWithoutComments.match(new RegExp(`<Modal[\\s\\S]*?</Modal>`, 'i'));
+              if (modalMatch) {
+                const modalContent = modalMatch[0];
+                const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapedHandlerName}`, 'i').test(modalContent);
+                if (hasOnOk) {
+                  // Modal 有 onOk，必须检查是否有 confirmLoading
+                  const hasConfirmLoading = new RegExp(`confirmLoading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(modalContent);
+                  if (hasConfirmLoading) {
+                    foundDeclareRequestLoading = true;
+                    hasProtection = true;
+                    apiCallPath.stop();
+                    return;
+                  } else {
+                    // Modal 有 onOk 但没有 confirmLoading，标记为没有保护
+                    foundModalOrDrawerWithoutLoading = true;
+                  }
+                }
+              }
+              
+              // 检查 Drawer 是否绑定了 confirmLoading（支持多行，不关心顺序）
+              const drawerMatch = contentWithoutComments.match(new RegExp(`<Drawer[\\s\\S]*?</Drawer>`, 'i'));
+              if (drawerMatch) {
+                const drawerContent = drawerMatch[0];
+                const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapedHandlerName}`, 'i').test(drawerContent);
+                if (hasOnOk) {
+                  // Drawer 有 onOk，必须检查是否有 confirmLoading
+                  const hasConfirmLoading = new RegExp(`confirmLoading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(drawerContent);
+                  if (hasConfirmLoading) {
+                    foundDeclareRequestLoading = true;
+                    hasProtection = true;
+                    apiCallPath.stop();
+                    return;
+                  } else {
+                    // Drawer 有 onOk 但没有 confirmLoading，标记为没有保护
+                    foundModalOrDrawerWithoutLoading = true;
+                  }
+                }
+              }
+              
+              // 检查 Popconfirm 是否绑定了 loading（支持多行，不关心顺序）
+              const popconfirmMatch = contentWithoutComments.match(new RegExp(`<Popconfirm[\\s\\S]*?</Popconfirm>`, 'i'));
+              if (popconfirmMatch) {
+                const popconfirmContent = popconfirmMatch[0];
+                const hasOnConfirm = new RegExp(`onConfirm[\\s\\S]*?${escapedHandlerName}`, 'i').test(popconfirmContent);
+                if (hasOnConfirm) {
+                  // Popconfirm 有 onConfirm，必须检查是否有 loading
+                  const hasLoading = new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(popconfirmContent);
+                  if (hasLoading) {
+                    foundDeclareRequestLoading = true;
+                    hasProtection = true;
+                    apiCallPath.stop();
+                    return;
+                  } else {
+                    // Popconfirm 有 onConfirm 但没有 loading，标记为没有保护
+                    foundModalOrDrawerWithoutLoading = true;
+                  }
+                }
+              }
+              
+              // 检查 Form 是否绑定了 onFinish（支持多行，不关心顺序）
+              const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
+              if (formMatch) {
+                const formContent = formMatch[0];
+                const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapedHandlerName}`, 'i').test(formContent);
+                if (hasOnFinish) {
+                  // Form 有 onFinish，必须检查是否有 loading
+                  // Form 的 loading 可能在 Form 组件上，也可能在提交按钮上
+                  const hasFormLoading = new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(formContent);
+                  // 检查提交按钮是否有 loading
+                  const hasSubmitButtonLoading = new RegExp(`htmlType=["']submit["'][\\s\\S]*?loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(formContent) ||
+                    new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}[\\s\\S]*?htmlType=["']submit["']`, 'i').test(formContent);
+                  
+                  if (hasFormLoading || hasSubmitButtonLoading) {
+                    foundDeclareRequestLoading = true;
+                    hasProtection = true;
+                    apiCallPath.stop();
+                    return;
+                  } else {
+                    // Form 有 onFinish 但没有 loading，标记为没有保护
+                    foundModalOrDrawerWithoutLoading = true;
+                  }
+                }
+              }
+              
+              // 如果找到了 Modal/Drawer/Popconfirm/Form 但没有 loading，不再检查其他方式
+              if (foundModalOrDrawerWithoutLoading) {
+                return;
+              }
+              
+              // 检查 Button 是否绑定了 loading（如果上面的 Modal/Drawer/Popconfirm 检查都没有通过）
+              const buttonLoadingPattern = new RegExp(`<Button[^>]*onClick.*${escapedHandlerName}[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i');
+              const buttonLoadingPattern2 = new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}[^>]*onClick.*${escapedHandlerName}`, 'i');
+              
+              if (buttonLoadingPattern.test(templateWithoutComments) || 
+                  buttonLoadingPattern2.test(templateWithoutComments) ||
                   checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, fullContent, templateContent)) {
                 foundDeclareRequestLoading = true;
                 hasProtection = true;
@@ -789,7 +1042,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
           }
         }
       }
-    });
+      });
+    }
   }
 
   if (hasApiCall && !hasProtection) {
@@ -811,19 +1065,17 @@ function checkRule2(filePath, parsed, diff) {
   if (!config.rule2.enabled) return null;
 
   const errors = [];
-  const { type, ast, template = '', content } = parsed;
+  const { ast, template = '', content } = parsed;
 
   // 检查是否是新增文件或新增了初始化逻辑
-  // 新增文件的判断：diff 以 +++ 开头，或者没有 --- 行
-  const isNewFile = !diff || (!diff.includes('---') && diff.includes('+++')) ||
-    (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
+  const fileIsNew = isNewFile(diff);
   const hasInitLogic = diff && (diff.includes('created') || diff.includes('mounted') ||
     diff.includes('useEffect') || diff.includes('componentDidMount'));
 
   // 检查是否有useEffect（即使不是新增文件，只要有useEffect也检查）
   const hasUseEffectInContent = content.includes('useEffect');
 
-  if (!isNewFile && !hasInitLogic && !hasUseEffectInContent) {
+  if (!fileIsNew && !hasInitLogic && !hasUseEffectInContent) {
     return null;
   }
 
@@ -953,8 +1205,9 @@ function checkRule2(filePath, parsed, diff) {
               if (declareRequestInfo && declareRequestInfo.loadingName) {
                 // 检查页面中是否使用了这个 loading
                 // 对于 JSX 文件，template 可能是 undefined，使用 content
+                // 规则2要求必须在 JSX 中实际使用（requireJSXUsage = true）
                 const templateContent = template || content || '';
-                if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, templateContent)) {
+                if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, templateContent, true)) {
                   hasLoading = true;
                 }
               } else {
@@ -963,8 +1216,9 @@ function checkRule2(filePath, parsed, diff) {
                 if (declareRequestInfoAny && declareRequestInfoAny.loadingName) {
                   // 检查页面中是否使用了这个 loading（即使第一个参数不是 'loading'）
                   // 对于 JSX 文件，template 可能是 undefined，使用 content
+                  // 规则2要求必须在 JSX 中实际使用（requireJSXUsage = true）
                   const templateContent = template || content || '';
-                  if (checkDeclareRequestLoadingUsage(declareRequestInfoAny.loadingName, content, templateContent)) {
+                  if (checkDeclareRequestLoadingUsage(declareRequestInfoAny.loadingName, content, templateContent, true)) {
                     hasLoading = true;
                   }
                 }
@@ -996,7 +1250,7 @@ function checkRule3(filePath, parsed, diff) {
   if (!config.rule3.enabled) return null;
 
   const errors = [];
-  const { type, ast, content } = parsed;
+  const { ast, content } = parsed;
 
   if (!ast) return null;
 
@@ -1204,7 +1458,7 @@ function checkRule4(filePath, parsed, diff) {
   if (!config.rule4.enabled) return null;
 
   const errors = [];
-  const { type, ast, template = '', content } = parsed;
+  const { ast, template = '', content } = parsed;
 
   // 检查是否使用了 Table 组件
   const hasTableComponent = (template && (template.includes('el-table') || template.includes('<Table'))) ||
@@ -1247,6 +1501,193 @@ function checkRule4(filePath, parsed, diff) {
       message: '该列表未使用 Table 组件，且未实现列表数据为空时的自定义空状态展示',
       suggestion: '1. 条件渲染「暂无数据」文案；2. 引入项目通用 Empty 组件；3. 配置空状态占位图与引导文案'
     });
+  }
+
+  return errors.length > 0 ? errors : null;
+}
+
+/**
+ * 检查规则5：表单输入项默认提示检查
+ */
+function checkRule5(filePath, parsed, diff) {
+  if (!config.rule5 || !config.rule5.enabled) return null;
+
+  const errors = [];
+  const { ast, template = '', content } = parsed;
+
+  // 检查是否是新增文件或新增了表单输入组件
+  const fileIsNew = isNewFile(diff);
+  const hasNewInput = diff && (
+    diff.includes('<Input') || diff.includes('<input') || diff.includes('<Select') ||
+    diff.includes('<select') || diff.includes('<DatePicker') || diff.includes('<TimePicker') ||
+    diff.includes('el-input') || diff.includes('el-select') || diff.includes('el-date-picker') ||
+    diff.includes('<InputNumber') || diff.includes('<AutoComplete') || diff.includes('<Cascader') ||
+    diff.includes('<TreeSelect') || diff.includes('<TextArea') || diff.includes('<textarea')
+  );
+
+  // 如果既不是新文件，也没有新增输入组件，则跳过检查
+  if (!fileIsNew && !hasNewInput) {
+    return null;
+  }
+
+  // 获取配置
+  const inputComponents = config.rule5.customKeywords.inputComponents || [
+    'Input', 'Input.TextArea', 'Input.Password', 'Input.Search', 'Input.Group',
+    'Select', 'DatePicker', 'RangePicker', 'TimePicker', 'InputNumber',
+    'AutoComplete', 'Cascader', 'TreeSelect', 'Transfer', 'Upload', 'Rate',
+    'el-input', 'el-select', 'el-date-picker', 'el-time-picker',
+    'el-input-number', 'el-autocomplete', 'el-cascader', 'el-tree-select',
+    'el-transfer', 'el-upload', 'el-rate',
+    'input', 'select', 'textarea'
+  ];
+  const placeholderAttributes = config.rule5.customKeywords.placeholderAttributes || ['placeholder', 'placeholderText'];
+  const whitelistKeywords = config.rule5.whitelist.keywords || [];
+
+  // 对于 JSX/TSX 文件，使用 AST 进行更精确的检查
+  if (ast && (type === 'js' || type === 'jsx' || type === 'ts' || type === 'tsx')) {
+    traverse(ast, {
+      JSXOpeningElement(path) {
+        const elementName = path.node.name;
+        let componentName = '';
+
+        // 获取组件名
+        if (t.isJSXIdentifier(elementName)) {
+          componentName = elementName.name;
+        } else if (t.isJSXMemberExpression(elementName)) {
+          // 处理 Input.TextArea 这种情况
+          const object = elementName.object;
+          const property = elementName.property;
+          if (t.isJSXIdentifier(object) && t.isJSXIdentifier(property)) {
+            componentName = `${object.name}.${property.name}`;
+          }
+        }
+
+        // 检查是否是配置的输入组件
+        const isInputComponent = inputComponents.some(comp => {
+          if (comp.includes('.')) {
+            return comp === componentName;
+          } else {
+            return comp === componentName || componentName.startsWith(comp);
+          }
+        });
+
+        if (!isInputComponent) {
+          return;
+        }
+
+        // 检查白名单
+        const attributes = path.node.attributes || [];
+        const hasWhitelistKeyword = attributes.some(attr => {
+          if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
+            const attrValue = attr.value;
+            if (t.isStringLiteral(attrValue)) {
+              return whitelistKeywords.some(keyword => attrValue.value.includes(keyword));
+            }
+          }
+          return false;
+        });
+
+        if (hasWhitelistKeyword) {
+          return;
+        }
+
+        // 检查是否有 placeholder 属性
+        let hasPlaceholder = false;
+        for (const attr of placeholderAttributes) {
+          const hasAttr = attributes.some(attrNode => {
+            if (t.isJSXAttribute(attrNode) && t.isJSXIdentifier(attrNode.name)) {
+              return attrNode.name.name === attr || attrNode.name.name.toLowerCase() === attr.toLowerCase();
+            }
+            return false;
+          });
+          if (hasAttr) {
+            hasPlaceholder = true;
+            break;
+          }
+        }
+
+        // 如果没有 placeholder，检查是否是新增的
+        if (!hasPlaceholder) {
+          const line = path.node.loc?.start.line || 0;
+          
+          if (isNewlyAddedInDiff(diff, componentName, fileIsNew)) {
+            errors.push({
+              rule: 5,
+              file: filePath,
+              line: line,
+              message: `新增的表单输入组件「${componentName}」缺少 placeholder 提示属性`,
+              suggestion: `为 ${componentName} 组件添加 placeholder 属性，提升用户体验。例如：<${componentName} placeholder="请输入..." />`
+            });
+          }
+        }
+      }
+    });
+  } else {
+    // 对于 Vue 和 HTML 文件，使用正则表达式检查
+    const fullContent = content || '';
+    const templateContent = template || '';
+    const combinedContent = fullContent + '\n' + templateContent;
+
+    // 移除注释内容，避免匹配到注释中的代码
+    const contentWithoutComments = removeComments(combinedContent);
+
+    // 检查每个输入组件
+    for (const componentName of inputComponents) {
+      // 构建匹配模式
+      let componentPattern;
+      if (componentName.includes('.')) {
+        // 处理 Input.TextArea 这种形式
+        const parts = componentName.split('.');
+        componentPattern = new RegExp(`<${parts[0]}[^>]*\\.${parts[1]}[^>]*>`, 'gi');
+      } else {
+        // 处理普通组件名
+        componentPattern = new RegExp(`<${componentName}[^>]*>`, 'gi');
+      }
+
+      // 查找所有匹配的组件
+      let match;
+      while ((match = componentPattern.exec(contentWithoutComments)) !== null) {
+        const componentTag = match[0];
+        const matchIndex = match.index;
+
+        // 检查是否在白名单中
+        if (whitelistKeywords.some(keyword => componentTag.includes(keyword))) {
+          continue;
+        }
+
+        // 检查是否有 placeholder 属性
+        let hasPlaceholder = false;
+        for (const attr of placeholderAttributes) {
+          // 检查 JSX 格式：placeholder="..." 或 placeholder={...}
+          const jsxPattern = new RegExp(`${attr}\\s*=\\s*["'{]`, 'i');
+          // 检查 Vue 格式：:placeholder="..." 或 placeholder="..." 或 v-bind:placeholder="..."
+          const vuePattern = new RegExp(`[:]?${attr}\\s*=\\s*["'{]|v-bind:${attr}\\s*=\\s*["'{]`, 'i');
+          
+          if (jsxPattern.test(componentTag) || vuePattern.test(componentTag)) {
+            hasPlaceholder = true;
+            break;
+          }
+        }
+
+        // 如果没有 placeholder，记录错误
+        if (!hasPlaceholder) {
+          // 计算行号
+          const beforeMatch = contentWithoutComments.substring(0, matchIndex);
+          const lineNum = beforeMatch.split('\n').length;
+
+          // 只检查新增的组件
+          if (isNewlyAddedInDiff(diff, componentName, fileIsNew)) {
+            errors.push({
+              rule: 5,
+              file: filePath,
+              line: lineNum,
+              message: `新增的表单输入组件「${componentName}」缺少 placeholder 提示属性`,
+              suggestion: `为 ${componentName} 组件添加 placeholder 属性，提升用户体验。例如：<${componentName} placeholder="请输入..." />`
+            });
+          }
+        }
+      }
+    }
   }
 
   return errors.length > 0 ? errors : null;
@@ -1597,15 +2038,20 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
 /**
  * 检查页面中是否使用了 declareRequest 定义的 loading
  * 例如：const { pageLoading } = props.global; 和 <Spin spinning={pageLoading}>
+ * 
+ * @param {string} loadingName - loading 名称
+ * @param {string} content - 文件内容
+ * @param {string} template - 模板内容（Vue 文件）
+ * @param {boolean} requireJSXUsage - 是否要求在 JSX 中实际使用（规则2需要）
  */
-function checkDeclareRequestLoadingUsage(loadingName, content, template = '') {
+function checkDeclareRequestLoadingUsage(loadingName, content, template = '', requireJSXUsage = false) {
   if (!loadingName) return false;
   
   // 合并 content 和 template 进行统一检查
   const fullContent = (content || '') + '\n' + (template || '');
   
   // 转义特殊字符
-  const escapedLoadingName = loadingName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedLoadingName = escapeRegExp(loadingName);
   
   // 检查解构赋值：const { pageLoading } = props.global; 或 const { pageLoading, other } = props.global;
   const destructurePatterns = [
@@ -1614,10 +2060,45 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '') {
     new RegExp(`var\\s*\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}\\s*=\\s*props\\.(global|\\w+)`, 'i')
   ];
   
+  let hasDestructure = false;
   for (const pattern of destructurePatterns) {
     if (pattern.test(fullContent)) {
-      return true;
+      hasDestructure = true;
+      break;
     }
+  }
+  
+  // 如果要求 JSX 使用，则必须同时满足解构赋值和在 JSX 中使用
+  if (requireJSXUsage) {
+    if (!hasDestructure) {
+      return false; // 没有解构赋值，直接返回 false
+    }
+    
+    // 检查是否在 JSX 中实际使用（排除注释）
+    const contentWithoutComments = removeComments(fullContent);
+    
+    // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
+    const templatePatterns = [
+      new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+      new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+      new RegExp(`spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+      new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+      new RegExp(`spinning=\\{[^}]*${escapedLoadingName}[^}]*\\}`, 'i'),
+      new RegExp(`loading=\\{[^}]*${escapedLoadingName}[^}]*\\}`, 'i')
+    ];
+    
+    for (const pattern of templatePatterns) {
+      if (pattern.test(contentWithoutComments)) {
+        return true; // 有解构赋值且在 JSX 中使用
+      }
+    }
+    
+    return false; // 有解构赋值但没有在 JSX 中使用
+  }
+  
+  // 不需要 JSX 使用的情况（规则1），只要有解构赋值或直接使用即可
+  if (hasDestructure) {
+    return true;
   }
   
   // 检查直接使用：props.global.pageLoading 或 props.xxx.pageLoading
@@ -1627,13 +2108,11 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '') {
   }
   
   // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
-  // 也检查 JSX 中的使用：spinning={pageLoading} 或 loading={pageLoading}
   const templatePatterns = [
     new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
     new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
     new RegExp(`spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
     new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
-    // 检查 JSX 属性：spinning={pageLoading} 或 loading={pageLoading}（没有引号）
     new RegExp(`spinning=\\{[^}]*${escapedLoadingName}[^}]*\\}`, 'i'),
     new RegExp(`loading=\\{[^}]*${escapedLoadingName}[^}]*\\}`, 'i')
   ];
@@ -1645,7 +2124,6 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '') {
   }
   
   // 检查变量直接使用：pageLoading（在 JSX 表达式中）
-  // 这个检查比较宽松，只检查变量名是否出现在代码中
   const variablePattern = new RegExp(`\\b${escapedLoadingName}\\b`, 'i');
   if (variablePattern.test(fullContent)) {
     // 进一步检查是否在 JSX 表达式中使用（如 {pageLoading}）
@@ -1865,17 +2343,19 @@ function runChecks() {
 
       const diff = getFileDiff(file);
 
-      // 执行4项规则检查
+      // 执行5项规则检查
       try {
         const errors1 = checkRule1(file, parsed, diff);
         const errors2 = checkRule2(file, parsed, diff);
         const errors3 = checkRule3(file, parsed, diff);
         const errors4 = checkRule4(file, parsed, diff);
+        const errors5 = checkRule5(file, parsed, diff);
 
         if (errors1) allErrors.push(...errors1);
         if (errors2) allErrors.push(...errors2);
         if (errors3) allErrors.push(...errors3);
         if (errors4) allErrors.push(...errors4);
+        if (errors5) allErrors.push(...errors5);
       } catch (checkError) {
         // 如果检查规则时出错，记录错误但继续检查其他文件
         console.warn(chalk.yellow(`⚠️  检查文件 ${file} 的规则时出错: ${checkError.message}`));
@@ -1923,7 +2403,8 @@ function getRuleName(ruleNum) {
     1: '防重复提交缺失',
     2: '首次进入页面缺失 loading 状态',
     3: '接口操作成功后缺失轻提示',
-    4: '非 Table 列表缺失自定义空状态'
+    4: '非 Table 列表缺失自定义空状态',
+    5: '表单输入项缺失 placeholder 提示'
   };
   return names[ruleNum] || '未知规则';
 }

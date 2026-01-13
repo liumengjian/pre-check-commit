@@ -71,6 +71,32 @@ module.exports = {
     }
   },
 
+  // 规则5：表单输入项默认提示检查
+  rule5: {
+    enabled: true,
+    // 无需提示的表单输入项关键词
+    whitelist: {
+      keywords: []
+    },
+    // 自定义表单输入组件名（需要检查 placeholder 的组件）
+    customKeywords: {
+      inputComponents: [
+        // Ant Design
+        'Input', 'Input.TextArea', 'Input.Password', 'Input.Search', 'Input.Group',
+        'Select', 'DatePicker', 'RangePicker', 'TimePicker', 'InputNumber',
+        'AutoComplete', 'Cascader', 'TreeSelect', 'Transfer', 'Upload', 'Rate',
+        // Element UI
+        'el-input', 'el-select', 'el-date-picker', 'el-time-picker',
+        'el-input-number', 'el-autocomplete', 'el-cascader', 'el-tree-select',
+        'el-transfer', 'el-upload', 'el-rate',
+        // 原生 HTML
+        'input', 'select', 'textarea'
+      ],
+      // 提示属性名（不同 UI 库可能不同）
+      placeholderAttributes: ['placeholder', 'placeholderText']
+    }
+  },
+
   // 全局配置
   global: {
     // 需要检查的文件后缀

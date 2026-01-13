@@ -381,6 +381,10 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
 
   let hasApiCall = false;
   let hasProtection = false;
+  // 用于检查问题1和问题2的变量
+  let definedButNotUsed = false;
+  let usedWrongLoading = false;
+  let correctLoadingName = null;
 
   // 检查函数开始处是否有状态锁检查（如 if (isSubmitting) return;）
   const funcBody = path.node.body;
@@ -777,35 +781,43 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                 if (foundLoadingReset) break;
               }
 
-              // 如果找到了loading的设置和重置，认为有防重复提交保护
-              if (foundLoadingReset) {
-                hasProtection = true;
+              // 如果找到了loading的设置和重置，还需要检查是否在JSX中实际使用了这个loading
+              // 只有在JSX中实际使用了loading时，才认为有防重复提交保护
+              if (foundLoadingReset && loadingVarBefore) {
+                // 检查loading是否在JSX中使用
+                const fullContent = parsed.content || '';
+                const contentWithoutComments = fullContent
+                  .replace(/\/\*[\s\S]*?\*\//g, '')
+                  .replace(/\/\/.*$/gm, '');
+                
+                const escapedVarName = loadingVarBefore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const loadingUsagePatterns = [
+                  new RegExp(`confirmLoading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                  new RegExp(`loading\\s*:\\s*${escapedVarName}\\b`, 'i'), // 匹配 loading: loading (注意：需要单词边界)
+                  new RegExp(`loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                  new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*:\\s*${escapedVarName}\\b[^}]*\\}`, 'i'), // 匹配 okButtonProps={{ loading: loading }}
+                  new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i')
+                ];
+                
+                let foundInJSX = false;
+                for (const pattern of loadingUsagePatterns) {
+                  if (pattern.test(contentWithoutComments)) {
+                    foundInJSX = true;
+                    break;
+                  }
+                }
+                
+                // 只有在JSX中实际使用了loading时，才设置hasProtection
+                if (foundInJSX) {
+                  hasProtection = true;
+                }
               }
             }
 
             // 原有的状态锁检查逻辑（保留兼容性）
-            if (!hasProtection) {
-              for (let i = 0; i < callIndex; i++) {
-                const stmt = statements[i];
-                if (t.isExpressionStatement(stmt) && t.isAssignmentExpression(stmt.expression)) {
-                  const left = stmt.expression.left;
-                  const right = stmt.expression.right;
-                  if (t.isIdentifier(left)) {
-                    const varName = left.name;
-                    if ((varName.includes('Submitting') || varName.includes('Loading') ||
-                      varName.includes('loading') || varName.includes('submitting')) &&
-                      (t.isBooleanLiteral(right) && right.value === true ||
-                        t.isUnaryExpression(right) && right.operator === '!' &&
-                        t.isBooleanLiteral(right.argument) && right.argument.value === false)) {
-                      // 检查调用后是否有状态锁设为 false（在 then/catch/finally 中）
-                      // 检查后续语句或 then/catch 回调
-                      hasProtection = true; // 暂时认为有保护，更详细的检查需要分析 Promise 链
-                      break;
-                    }
-                  }
-                }
-              }
-            }
+            // 注意：这里不再自动设置hasProtection，因为需要检查loading是否在JSX中实际使用
+            // 如果只是设置了loading但没有在JSX中使用，不应该认为有保护
+            // 这个检查逻辑已经在上面的loading状态管理检查中处理了
           }
         }
       }
@@ -822,62 +834,95 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
   }
 
   // 检查是否使用了 declareRequest 定义的 loading（防重复提交）
+  // 同时检查：1. 定义了loading但没有使用；2. 使用了其他接口的loading
   if (!hasProtection && hasApiCall) {
     // 查找函数中的所有接口调用
     let foundDeclareRequestLoading = false;
     let foundModalOrDrawerWithoutLoading = false; // 标记是否找到 Modal/Drawer/Form 但没有 loading
+    let usedWrongLoading = false; // 标记是否使用了错误的loading
+    let correctLoadingName = null; // 正确的loading名称
     
     // 先检查是否有 Modal/Drawer/Form 但没有 loading（在遍历接口调用之前）
     const handlerName = handler.name.replace(/['"()]/g, '').trim();
     const templateContent = parsed.template || parsed.content || '';
     const fullContent = parsed.content || '';
     
-    // 移除注释后检查
+    // 移除注释后检查（先移除多行注释，再移除单行注释）
     const contentWithoutComments = fullContent
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/\/\/.*$/gm, '');
+      .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
+      .replace(/\/\/.*$/gm, ''); // 移除 // 注释
     
-    // 检查 Modal/Drawer/Form 是否有 onOk/onFinish 但没有 loading
-    // 这里先不检查具体的 loading 名称，只检查是否有这些组件但没有 loading
-    const modalMatch = contentWithoutComments.match(new RegExp(`<Modal[\\s\\S]*?</Modal>`, 'i'));
-    if (modalMatch) {
-      const modalContent = modalMatch[0];
-      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(modalContent);
-      if (hasOnOk && !new RegExp(`confirmLoading=\\{[^}]+\\}`, 'i').test(modalContent)) {
-        foundModalOrDrawerWithoutLoading = true;
+    // 先不检查Modal/Drawer/Form是否有loading，这个检查会在检查declareRequest的loading时进行
+    // 这样可以检测到使用了错误的loading的情况
+    
+    // 检查问题1：定义了loading但没有使用
+    // 查找函数中是否有 setLoading(true) 和 setLoading(false) 的逻辑
+    let definedLoadingVars = new Set(); // 记录定义的loading变量名
+    let usedLoadingVars = new Set(); // 记录在JSX中使用的loading变量名
+    
+    // 查找函数中定义的loading变量（通过setLoading调用）
+    path.traverse({
+      CallExpression(setLoadingPath) {
+        const callee = setLoadingPath.node.callee;
+        if (t.isIdentifier(callee)) {
+          const funcName = callee.name;
+          const funcNameLower = funcName.toLowerCase();
+          // 检查是否是 setLoading, setSubmitting 等函数
+          if (funcNameLower.includes('setloading') || funcNameLower.includes('setsubmitting')) {
+            // 从函数名中提取变量名：setLoading -> loading
+            const loadingVarName = funcName.replace(/^set/i, '').toLowerCase();
+            definedLoadingVars.add(loadingVarName);
+          }
+        }
+      },
+      VariableDeclarator(varPath) {
+        // 检查数组解构：const [loading, setLoading] = useState(false);
+        if (t.isArrayPattern(varPath.node.id)) {
+          const elements = varPath.node.id.elements;
+          if (elements && elements.length > 0 && t.isIdentifier(elements[0])) {
+            const varName = elements[0].name;
+            const varNameLower = varName.toLowerCase();
+            if (varNameLower.includes('loading') || varNameLower.includes('submitting')) {
+              definedLoadingVars.add(varName);
+            }
+          }
+        }
       }
-    }
+    });
     
-    const drawerMatch = contentWithoutComments.match(new RegExp(`<Drawer[\\s\\S]*?</Drawer>`, 'i'));
-    if (drawerMatch) {
-      const drawerContent = drawerMatch[0];
-      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(drawerContent);
-      if (hasOnOk && !new RegExp(`confirmLoading=\\{[^}]+\\}`, 'i').test(drawerContent)) {
-        foundModalOrDrawerWithoutLoading = true;
-      }
-    }
-    
-    const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
-    if (formMatch) {
-      const formContent = formMatch[0];
-      const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(formContent);
-      if (hasOnFinish) {
-        // Form 的 loading 可能在 Form 组件上，也可能在提交按钮上
-        const hasFormLoading = new RegExp(`loading=\\{[^}]+\\}`, 'i').test(formContent);
-        const hasSubmitButtonLoading = new RegExp(`htmlType=["']submit["'][\\s\\S]*?loading=\\{[^}]+\\}`, 'i').test(formContent) ||
-          new RegExp(`loading=\\{[^}]+\\}[\\s\\S]*?htmlType=["']submit["']`, 'i').test(formContent);
-        
-        if (!hasFormLoading && !hasSubmitButtonLoading) {
-          foundModalOrDrawerWithoutLoading = true;
+    // 查找JSX中使用的loading变量
+    const fullContentForCheck = contentWithoutComments;
+    for (const loadingVar of definedLoadingVars) {
+      // 检查是否在JSX中使用（排除注释）
+      const escapedVarName = loadingVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // 检查 Modal/Drawer/Button 等组件上的 loading 属性
+      const loadingUsagePatterns = [
+        new RegExp(`confirmLoading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+        new RegExp(`loading\\s*:\\s*${escapedVarName}\\b`, 'i'), // 匹配 loading: loading (注意：需要单词边界)
+        new RegExp(`loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+        new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*:\\s*${escapedVarName}\\b[^}]*\\}`, 'i'), // 匹配 okButtonProps={{ loading: loading }}
+        new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i')
+      ];
+      
+      for (const pattern of loadingUsagePatterns) {
+        if (pattern.test(fullContentForCheck)) {
+          usedLoadingVars.add(loadingVar);
+          break;
         }
       }
     }
     
-    // 如果找到了 Modal/Drawer/Form 但没有 loading，直接返回，不再检查其他方式
-    // 注意：这里不设置 hasProtection，让外层逻辑判定为没有保护
-    if (!foundModalOrDrawerWithoutLoading) {
-      // 只有在没有找到 Modal/Drawer/Form 但没有 loading 的情况下，才继续检查接口调用
-      path.traverse({
+    // 如果定义了loading但没有使用，标记为没有保护
+    const unusedLoadingVars = Array.from(definedLoadingVars).filter(v => !usedLoadingVars.has(v));
+    if (unusedLoadingVars.length > 0) {
+      // 定义了loading但没有使用，不设置hasProtection，让外层逻辑判定为没有保护
+      definedButNotUsed = true;
+      foundModalOrDrawerWithoutLoading = true;
+    }
+    
+    // 继续检查declareRequest的loading，这样可以检测到使用了错误的loading的情况
+    // 注意：即使定义了loading但没有使用，也要检查是否使用了错误的loading
+    path.traverse({
       CallExpression(apiCallPath) {
         if (isApiCall(apiCallPath)) {
           const actionName = getActionNameFromCall(apiCallPath);
@@ -908,124 +953,199 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
               const escapedLoadingName = declareRequestInfo.loadingName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               const escapedHandlerName = handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               
-              // 先检查 Modal/Drawer/Popconfirm，如果它们有 onOk/onConfirm 但没有 loading，则没有保护
-              // 检查 Modal 是否绑定了 confirmLoading（支持多行，不关心顺序）
+              // 检查问题2：是否使用了其他接口的loading
+              // 设置正确的loading名称
+              correctLoadingName = declareRequestInfo.loadingName;
+              
+              // 检查 Modal 是否使用了错误的loading
               const modalMatch = contentWithoutComments.match(new RegExp(`<Modal[\\s\\S]*?</Modal>`, 'i'));
               if (modalMatch) {
                 const modalContent = modalMatch[0];
                 const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapedHandlerName}`, 'i').test(modalContent);
                 if (hasOnOk) {
-                  // Modal 有 onOk，必须检查是否有 confirmLoading
-                  const hasConfirmLoading = new RegExp(`confirmLoading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(modalContent);
-                  if (hasConfirmLoading) {
-                    foundDeclareRequestLoading = true;
-                    hasProtection = true;
-                    apiCallPath.stop();
-                    return;
+                  // Modal 有 onOk，检查 confirmLoading
+                  const confirmLoadingMatch = modalContent.match(/confirmLoading\s*=\s*\{([^}]+)\}/i);
+                  if (confirmLoadingMatch) {
+                    const loadingValue = confirmLoadingMatch[1].trim();
+                    // 检查是否是当前接口对应的loading
+                    if (loadingValue === declareRequestInfo.loadingName) {
+                      foundDeclareRequestLoading = true;
+                      hasProtection = true;
+                      apiCallPath.stop();
+                      return;
+                    } else {
+                      // 使用了其他接口的loading
+                      usedWrongLoading = true;
+                      correctLoadingName = declareRequestInfo.loadingName;
+                      // 不设置hasProtection，让外层逻辑判定为没有保护
+                    }
                   } else {
-                    // Modal 有 onOk 但没有 confirmLoading，标记为没有保护
-                    foundModalOrDrawerWithoutLoading = true;
+                    // Modal 有 onOk 但没有 confirmLoading，检查 okButtonProps 中的 loading
+                    const okButtonPropsMatch = modalContent.match(/okButtonProps\s*=\s*\{([^}]+)\}/i);
+                    if (okButtonPropsMatch) {
+                      const okButtonPropsContent = okButtonPropsMatch[1];
+                      // 检查 okButtonProps 中是否有 loading
+                      const loadingInOkButtonPropsMatch = okButtonPropsContent.match(/loading\s*:\s*([^,}]+)/i);
+                      if (loadingInOkButtonPropsMatch) {
+                        const loadingValue = loadingInOkButtonPropsMatch[1].trim().replace(/['"]/g, '');
+                        // 检查是否是当前接口对应的loading
+                        if (loadingValue === declareRequestInfo.loadingName) {
+                          foundDeclareRequestLoading = true;
+                          hasProtection = true;
+                          apiCallPath.stop();
+                          return;
+                        } else {
+                          // 使用了其他接口的loading
+                          usedWrongLoading = true;
+                          correctLoadingName = declareRequestInfo.loadingName;
+                        }
+                      } else {
+                        // Modal 有 onOk，okButtonProps 存在但没有 loading
+                        foundModalOrDrawerWithoutLoading = true;
+                      }
+                    } else {
+                      // Modal 有 onOk 但没有 confirmLoading 和 okButtonProps
+                      foundModalOrDrawerWithoutLoading = true;
+                    }
                   }
                 }
               }
               
-              // 检查 Drawer 是否绑定了 confirmLoading（支持多行，不关心顺序）
+              // 检查 Drawer 是否使用了错误的loading
               const drawerMatch = contentWithoutComments.match(new RegExp(`<Drawer[\\s\\S]*?</Drawer>`, 'i'));
               if (drawerMatch) {
                 const drawerContent = drawerMatch[0];
                 const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapedHandlerName}`, 'i').test(drawerContent);
                 if (hasOnOk) {
-                  // Drawer 有 onOk，必须检查是否有 confirmLoading
-                  const hasConfirmLoading = new RegExp(`confirmLoading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(drawerContent);
-                  if (hasConfirmLoading) {
-                    foundDeclareRequestLoading = true;
-                    hasProtection = true;
-                    apiCallPath.stop();
-                    return;
+                  const confirmLoadingMatch = drawerContent.match(/confirmLoading\s*=\s*\{([^}]+)\}/i);
+                  if (confirmLoadingMatch) {
+                    const loadingValue = confirmLoadingMatch[1].trim();
+                    if (loadingValue === declareRequestInfo.loadingName) {
+                      foundDeclareRequestLoading = true;
+                      hasProtection = true;
+                      apiCallPath.stop();
+                      return;
+                    } else {
+                      usedWrongLoading = true;
+                    }
                   } else {
-                    // Drawer 有 onOk 但没有 confirmLoading，标记为没有保护
                     foundModalOrDrawerWithoutLoading = true;
                   }
                 }
               }
               
-              // 检查 Popconfirm 是否绑定了 loading（支持多行，不关心顺序）
+              // 检查 Popconfirm 是否使用了错误的loading
               const popconfirmMatch = contentWithoutComments.match(new RegExp(`<Popconfirm[\\s\\S]*?</Popconfirm>`, 'i'));
               if (popconfirmMatch) {
                 const popconfirmContent = popconfirmMatch[0];
                 const hasOnConfirm = new RegExp(`onConfirm[\\s\\S]*?${escapedHandlerName}`, 'i').test(popconfirmContent);
                 if (hasOnConfirm) {
-                  // Popconfirm 有 onConfirm，必须检查是否有 loading
-                  const hasLoading = new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(popconfirmContent);
-                  if (hasLoading) {
-                    foundDeclareRequestLoading = true;
-                    hasProtection = true;
-                    apiCallPath.stop();
-                    return;
+                  const loadingMatch = popconfirmContent.match(/loading\s*=\s*\{([^}]+)\}/i);
+                  if (loadingMatch) {
+                    const loadingValue = loadingMatch[1].trim();
+                    if (loadingValue === declareRequestInfo.loadingName) {
+                      foundDeclareRequestLoading = true;
+                      hasProtection = true;
+                      apiCallPath.stop();
+                      return;
+                    } else {
+                      usedWrongLoading = true;
+                    }
                   } else {
-                    // Popconfirm 有 onConfirm 但没有 loading，标记为没有保护
                     foundModalOrDrawerWithoutLoading = true;
                   }
                 }
               }
               
-              // 检查 Form 是否绑定了 onFinish（支持多行，不关心顺序）
+              // 检查 Form 是否使用了错误的loading
               const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
               if (formMatch) {
                 const formContent = formMatch[0];
                 const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapedHandlerName}`, 'i').test(formContent);
                 if (hasOnFinish) {
-                  // Form 有 onFinish，必须检查是否有 loading
-                  // Form 的 loading 可能在 Form 组件上，也可能在提交按钮上
-                  const hasFormLoading = new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(formContent);
-                  // 检查提交按钮是否有 loading
-                  const hasSubmitButtonLoading = new RegExp(`htmlType=["']submit["'][\\s\\S]*?loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i').test(formContent) ||
-                    new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}[\\s\\S]*?htmlType=["']submit["']`, 'i').test(formContent);
+                  const formLoadingMatch = formContent.match(/loading\s*=\s*\{([^}]+)\}/i);
+                  const submitButtonLoadingMatch = formContent.match(/htmlType=["']submit["'][^>]*loading\s*=\s*\{([^}]+)\}/i) ||
+                    formContent.match(/loading\s*=\s*\{([^}]+)\}[^>]*htmlType=["']submit["']/i);
                   
-                  if (hasFormLoading || hasSubmitButtonLoading) {
-                    foundDeclareRequestLoading = true;
-                    hasProtection = true;
-                    apiCallPath.stop();
-                    return;
+                  if (formLoadingMatch || submitButtonLoadingMatch) {
+                    const loadingValue = (formLoadingMatch ? formLoadingMatch[1] : submitButtonLoadingMatch[1]).trim();
+                    if (loadingValue === declareRequestInfo.loadingName) {
+                      foundDeclareRequestLoading = true;
+                      hasProtection = true;
+                      apiCallPath.stop();
+                      return;
+                    } else {
+                      usedWrongLoading = true;
+                    }
                   } else {
-                    // Form 有 onFinish 但没有 loading，标记为没有保护
                     foundModalOrDrawerWithoutLoading = true;
                   }
                 }
               }
               
-              // 如果找到了 Modal/Drawer/Popconfirm/Form 但没有 loading，不再检查其他方式
-              if (foundModalOrDrawerWithoutLoading) {
-                return;
+              // 检查 Button 是否使用了错误的loading
+              const buttonLoadingMatch = templateWithoutComments.match(new RegExp(`<Button[^>]*onClick.*${escapedHandlerName}[^>]*loading\\s*=\\s*\\{([^}]+)\\}`, 'i')) ||
+                templateWithoutComments.match(new RegExp(`<Button[^>]*loading\\s*=\\s*\\{([^}]+)\\}[^>]*onClick.*${escapedHandlerName}`, 'i'));
+              
+              if (buttonLoadingMatch) {
+                const loadingValue = buttonLoadingMatch[1].trim();
+                if (loadingValue === declareRequestInfo.loadingName) {
+                  foundDeclareRequestLoading = true;
+                  hasProtection = true;
+                  apiCallPath.stop();
+                  return;
+                } else {
+                  usedWrongLoading = true;
+                }
               }
+              
+              // 如果使用了错误的loading，标记为没有保护，但不返回，继续检查其他组件
+              // 如果找到了 Modal/Drawer/Popconfirm/Form 但没有 loading，也不返回，继续检查其他组件
+              // 这样可以检测到所有的问题
               
               // 检查 Button 是否绑定了 loading（如果上面的 Modal/Drawer/Popconfirm 检查都没有通过）
               const buttonLoadingPattern = new RegExp(`<Button[^>]*onClick.*${escapedHandlerName}[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i');
               const buttonLoadingPattern2 = new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}[^>]*onClick.*${escapedHandlerName}`, 'i');
               
-              if (buttonLoadingPattern.test(templateWithoutComments) || 
-                  buttonLoadingPattern2.test(templateWithoutComments) ||
-                  checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, fullContent, templateContent)) {
-                foundDeclareRequestLoading = true;
-                hasProtection = true;
-                apiCallPath.stop();
+              // 只有在没有使用错误的loading，且Modal/Drawer/Form有loading的情况下，才设置hasProtection
+              if (!usedWrongLoading && !foundModalOrDrawerWithoutLoading) {
+                if (buttonLoadingPattern.test(templateWithoutComments) || 
+                    buttonLoadingPattern2.test(templateWithoutComments) ||
+                    checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, fullContent, templateContent)) {
+                  foundDeclareRequestLoading = true;
+                  hasProtection = true;
+                  apiCallPath.stop();
+                }
               }
             }
           }
         }
       }
       });
-    }
   }
 
   if (hasApiCall && !hasProtection) {
     const line = handler.line || path.node.loc?.start.line || 0;
+    
+    // 根据问题类型生成不同的错误消息
+    // 注意：definedButNotUsed、usedWrongLoading 和 correctLoadingName 应该在上面的 if (!hasProtection && hasApiCall) 块中已经设置
+    let errorMessage = `新增按钮「${funcName}」的点击事件中调用了接口，但未实现防重复提交逻辑`;
+    let suggestion = '1. 增加按钮 loading 状态绑定，接口调用前设置 loading 为 true，调用后设置为 false；2. 增加按钮禁用状态绑定；3. 使用防抖函数包装接口调用（延迟≥500ms）；4. 增加布尔状态锁控制重复提交';
+    
+    if (definedButNotUsed) {
+      errorMessage = `新增按钮「${funcName}」的点击事件中定义了 loading 状态，但未在 JSX 中使用（如 Modal 的 confirmLoading 或 Button 的 loading 属性）`;
+      suggestion = `请在 Modal/Drawer/Button 等组件上绑定定义的 loading 状态，例如：<Modal confirmLoading={loading} onOk={${funcName}}> 或 <Button loading={loading} onClick={${funcName}}>`;
+    } else if (usedWrongLoading && correctLoadingName) {
+      errorMessage = `新增按钮「${funcName}」的点击事件中使用了其他接口的 loading，应使用接口「${correctLoadingName}」对应的 loading`;
+      suggestion = `请使用正确的 loading 变量，该接口对应的 loading 名称应为「${correctLoadingName}」。请检查 props 解构和组件上的 loading 绑定`;
+    }
+    
     errors.push({
       rule: 1,
       file: filePath,
       line: line,
-      message: `新增按钮「${funcName}」的点击事件中调用了接口，但未实现防重复提交逻辑`,
-      suggestion: '1. 增加按钮 loading 状态绑定，接口调用前设置 loading 为 true，调用后设置为 false；2. 增加按钮禁用状态绑定；3. 使用防抖函数包装接口调用（延迟≥500ms）；4. 增加布尔状态锁控制重复提交'
+      message: errorMessage,
+      suggestion: suggestion
     });
   }
 }
@@ -1170,6 +1290,110 @@ function checkRule2(filePath, parsed, diff) {
             }
           }
           
+          // 检查是否使用了 useState 定义的 loading 变量并在 JSX 中使用
+          if (!hasLoading) {
+            // 查找接口调用在 useEffect 中的位置
+            const funcBody = parentFunc.node.body;
+            if (t.isBlockStatement(funcBody)) {
+              const statements = funcBody.body;
+              
+              // 找到接口调用在函数体中的位置
+              let callIndex = -1;
+              for (let i = 0; i < statements.length; i++) {
+                const stmt = statements[i];
+                // 检查是否是包含接口调用的语句
+                if (t.isExpressionStatement(stmt)) {
+                  if (t.isCallExpression(stmt.expression)) {
+                    // 检查是否是接口调用本身
+                    if (stmt.expression === callPath.node) {
+                      callIndex = i;
+                      break;
+                    }
+                    // 检查是否是链式调用，如 props.xxxAction().then()
+                    if (t.isMemberExpression(stmt.expression.callee)) {
+                      let checkExpr = stmt.expression.callee;
+                      while (checkExpr && t.isMemberExpression(checkExpr)) {
+                        if (checkExpr.object === callPath.node) {
+                          callIndex = i;
+                          break;
+                        }
+                        checkExpr = checkExpr.object;
+                      }
+                      if (callIndex >= 0) break;
+                    }
+                  }
+                }
+                // 检查是否是变量声明，初始值是接口调用
+                if (t.isVariableDeclaration(stmt)) {
+                  for (const declarator of stmt.declarations) {
+                    if (t.isCallExpression(declarator.init) && declarator.init === callPath.node) {
+                      callIndex = i;
+                      break;
+                    }
+                  }
+                  if (callIndex >= 0) break;
+                }
+              }
+              
+              // 如果找到了接口调用的位置，检查调用前是否有 setLoading(true) 等调用
+              if (callIndex >= 0) {
+                let loadingVarName = null;
+                // 检查接口调用前的语句
+                for (let i = 0; i < callIndex; i++) {
+                  const stmt = statements[i];
+                  if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
+                    const callee = stmt.expression.callee;
+                    const args = stmt.expression.arguments;
+                    if (t.isIdentifier(callee)) {
+                      const funcName = callee.name;
+                      const funcNameLower = funcName.toLowerCase();
+                      // 检查是否是 setLoading, setPageLoading 等函数，且设置为 true
+                      if ((funcNameLower.includes('setloading') || funcNameLower.includes('setsubmitting')) &&
+                          args.length > 0 && t.isBooleanLiteral(args[0]) && args[0].value === true) {
+                        // 从函数名中提取变量名：setPageLoading -> pageLoading, setLoading -> loading
+                        const extractedName = funcName.replace(/^set/i, '');
+                        // 首字母转为小写：PageLoading -> pageLoading
+                        loadingVarName = extractedName.charAt(0).toLowerCase() + extractedName.slice(1);
+                        break; // 找到接口调用前设置的loading，停止查找
+                      }
+                    }
+                  }
+                }
+                
+                // 如果找到了loading变量，检查是否在JSX中使用
+                if (loadingVarName) {
+                  const templateContent = template || content || '';
+                  const fullContent = content || '';
+                  const contentWithoutComments = fullContent
+                    .replace(/\/\*[\s\S]*?\*\//g, '')
+                    .replace(/\/\/.*$/gm, '');
+                  
+                  const escapedVarName = loadingVarName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  // 同时检查首字母大写和小写的情况（pageLoading 和 PageLoading）
+                  const escapedVarNameUpper = loadingVarName.charAt(0).toUpperCase() + loadingVarName.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  // 检查是否在JSX中使用（Spin、Table、Button等组件的loading属性）
+                  const loadingUsagePatterns = [
+                    new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedVarNameUpper}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`<Table[^>]*loading=\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`<Table[^>]*loading=\\{[^}]*\\b${escapedVarNameUpper}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`loading=\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`loading=\\{[^}]*\\b${escapedVarNameUpper}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`spinning=\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`spinning=\\{[^}]*\\b${escapedVarNameUpper}\\b[^}]*\\}`, 'i')
+                  ];
+                  
+                  for (const pattern of loadingUsagePatterns) {
+                    if (pattern.test(contentWithoutComments)) {
+                      hasLoading = true;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+          
           // 检查是否使用了 declareRequest 定义的 loading
           if (!hasLoading) {
             const actionName = getActionNameFromCall(callPath);
@@ -1209,7 +1433,7 @@ function checkRule2(filePath, parsed, diff) {
         file: filePath,
         line: ast.loc?.start.line || 0,
         message: `新增${isListPage ? '列表页' : '详情页'}首次进入时调用了数据查询接口，但未实现有效的 loading 展示与隐藏逻辑`,
-        suggestion: '1. 使用全局 loading 方法包裹接口调用；2. 增加页面级 Spin 组件，绑定 isLoading 状态；3. 配置表格组件自带 loading 属性'
+        suggestion: '1. 使用全局 loading 方法包裹接口调用；2. 增加页面级 Spin 组件，绑定 isLoading 状态'
       });
     }
   }
@@ -2087,9 +2311,10 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '', re
       .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
       .replace(/\/\/.*$/gm, ''); // 移除 // 注释
     
-    // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
+    // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Table loading={pageLoading}> 或 <Button loading={pageLoading}>
     const templatePatterns = [
       new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+      new RegExp(`<Table[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
       new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
       new RegExp(`spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
       new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
@@ -2117,9 +2342,10 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '', re
     return true;
   }
   
-  // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
+  // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Table loading={pageLoading}> 或 <Button loading={pageLoading}>
   const templatePatterns = [
     new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+    new RegExp(`<Table[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
     new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
     new RegExp(`spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
     new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),

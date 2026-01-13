@@ -1584,28 +1584,56 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
 function checkDeclareRequestLoadingUsage(loadingName, content, template = '') {
   if (!loadingName) return false;
   
-  // 检查解构赋值：const { pageLoading } = props.global;
-  const destructurePattern = new RegExp(`const\\s*\\{[^}]*\\b${loadingName}\\b[^}]*\\}\\s*=\\s*props\\.(global|\\w+)`, 'i');
-  if (destructurePattern.test(content)) {
-    return true;
+  // 合并 content 和 template 进行统一检查
+  const fullContent = (content || '') + '\n' + (template || '');
+  
+  // 转义特殊字符
+  const escapedLoadingName = loadingName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  
+  // 检查解构赋值：const { pageLoading } = props.global; 或 const { pageLoading, other } = props.global;
+  const destructurePatterns = [
+    new RegExp(`const\\s*\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}\\s*=\\s*props\\.(global|\\w+)`, 'i'),
+    new RegExp(`let\\s*\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}\\s*=\\s*props\\.(global|\\w+)`, 'i'),
+    new RegExp(`var\\s*\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}\\s*=\\s*props\\.(global|\\w+)`, 'i')
+  ];
+  
+  for (const pattern of destructurePatterns) {
+    if (pattern.test(fullContent)) {
+      return true;
+    }
   }
   
   // 检查直接使用：props.global.pageLoading 或 props.xxx.pageLoading
-  const directPattern = new RegExp(`props\\.(global|\\w+)\\.${loadingName}`, 'i');
-  if (directPattern.test(content) || directPattern.test(template)) {
+  const directPattern = new RegExp(`props\\.(global|\\w+)\\.${escapedLoadingName}`, 'i');
+  if (directPattern.test(fullContent)) {
     return true;
   }
   
   // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
+  // 也检查 JSX 中的使用：spinning={pageLoading} 或 loading={pageLoading}
   const templatePatterns = [
-    new RegExp(`<Spin[^>]*spinning=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i'),
-    new RegExp(`<Button[^>]*loading=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i'),
-    new RegExp(`spinning=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i'),
-    new RegExp(`loading=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i')
+    new RegExp(`<Spin[^>]*spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+    new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+    new RegExp(`spinning=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+    new RegExp(`loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i'),
+    // 检查 JSX 属性：spinning={pageLoading} 或 loading={pageLoading}（没有引号）
+    new RegExp(`spinning=\\{[^}]*${escapedLoadingName}[^}]*\\}`, 'i'),
+    new RegExp(`loading=\\{[^}]*${escapedLoadingName}[^}]*\\}`, 'i')
   ];
   
   for (const pattern of templatePatterns) {
-    if (pattern.test(template) || pattern.test(content)) {
+    if (pattern.test(fullContent)) {
+      return true;
+    }
+  }
+  
+  // 检查变量直接使用：pageLoading（在 JSX 表达式中）
+  // 这个检查比较宽松，只检查变量名是否出现在代码中
+  const variablePattern = new RegExp(`\\b${escapedLoadingName}\\b`, 'i');
+  if (variablePattern.test(fullContent)) {
+    // 进一步检查是否在 JSX 表达式中使用（如 {pageLoading}）
+    const jsxUsagePattern = new RegExp(`\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i');
+    if (jsxUsagePattern.test(fullContent)) {
       return true;
     }
   }

@@ -22,6 +22,17 @@ if (!PACKAGE_ROOT.includes('node_modules')) {
   const possiblePath = path.join(PROJECT_ROOT, 'node_modules', 'prina-pre-commit-check');
   if (fs.existsSync(possiblePath)) {
     PACKAGE_ROOT = possiblePath;
+  } else {
+    // 可能是全局安装，尝试从全局 npm 目录查找
+    try {
+      const globalPrefix = execSync('npm config get prefix', { encoding: 'utf-8' }).trim();
+      const globalPath = path.join(globalPrefix, 'lib', 'node_modules', 'prina-pre-commit-check');
+      if (fs.existsSync(globalPath)) {
+        PACKAGE_ROOT = globalPath;
+      }
+    } catch (e) {
+      // 忽略错误，使用当前目录
+    }
   }
 }
 
@@ -43,10 +54,34 @@ function isGitRepo() {
 function installHusky() {
   try {
     console.log(chalk.blue('📦 正在安装 husky...'));
+    
+    // 检查 husky 是否已安装
+    const packageJsonPath = path.join(PROJECT_ROOT, 'package.json');
+    let needsHusky = true;
+    
+    if (fs.existsSync(packageJsonPath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+      const allDeps = {
+        ...(packageJson.dependencies || {}),
+        ...(packageJson.devDependencies || {})
+      };
+      if (allDeps['husky']) {
+        needsHusky = false;
+        console.log(chalk.blue('   husky 已在 package.json 中'));
+      }
+    }
+    
+    // 尝试安装 husky
     execSync('npx husky install', { stdio: 'inherit', cwd: PROJECT_ROOT });
     console.log(chalk.green('✓ Husky 安装成功'));
+    
+    // 如果 husky 不在 package.json 中，建议添加
+    if (needsHusky) {
+      console.log(chalk.yellow('💡 建议将 husky 添加到 devDependencies: npm install husky --save-dev'));
+    }
   } catch (e) {
     console.warn(chalk.yellow('⚠️  Husky 安装失败，请手动执行: npx husky install'));
+    console.warn(chalk.yellow('   如果 husky 未安装，请先执行: npm install husky --save-dev'));
   }
 }
 
@@ -70,15 +105,31 @@ function createPreCommitHook() {
 
   // 检查是否已经包含我们的检查命令
   const checkCommand = 'npx pre-commit-check';
-  if (hookContent.includes(checkCommand)) {
+  const checkCommandAlt = 'pre-commit-check'; // 兼容不带 npx 的情况
+  if (hookContent.includes(checkCommand) || hookContent.includes(checkCommandAlt)) {
     console.log(chalk.green('✓ Pre-commit hook 已配置'));
     return;
   }
 
   // 添加检查命令
-  const newHookContent = hookContent
-    ? `${hookContent}\n${checkCommand}`
-    : `#!/usr/bin/env sh\n. "$(dirname -- "$0")/_/husky.sh"\n\n${checkCommand}\n`;
+  // 如果 hook 文件为空或不存在，创建标准的 husky hook
+  let newHookContent;
+  if (!hookContent || hookContent.trim() === '') {
+    // 创建新的 hook 文件
+    newHookContent = `#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+${checkCommand}
+`;
+  } else {
+    // 追加到现有 hook
+    // 检查是否已经有 husky.sh 的引用
+    if (!hookContent.includes('husky.sh')) {
+      newHookContent = `. "$(dirname -- "$0")/_/husky.sh"\n\n${hookContent}\n${checkCommand}\n`;
+    } else {
+      newHookContent = `${hookContent}\n${checkCommand}\n`;
+    }
+  }
 
   fs.writeFileSync(preCommitHook, newHookContent);
   

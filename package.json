@@ -4,7 +4,9 @@
   "description": "Git pre-commit hook for frontend code quality checks",
   "main": "commit-check-core.js",
   "bin": {
-    "pre-commit-check": "bin/pre-commit-check.js"
+    "pre-commit-check": "bin/pre-commit-check.js",
+    "pre-commit-check-diagnose": "bin/diagnose.js",
+    "pre-commit-check-init": "bin/init.js"
   },
   "files": [
     "bin",

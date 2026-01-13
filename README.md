@@ -33,8 +33,35 @@ yarn add prina-pre-commit-check -D
 ```bash
 npm run prepare
 # 或
-npx prina-pre-commit-check --init
+npx pre-commit-check --init
 ```
+
+### 方式二：全局安装
+
+#### 1. 全局安装包
+
+```bash
+npm install -g prina-pre-commit-check
+```
+
+#### 2. 在项目中初始化
+
+进入项目目录，执行初始化命令：
+
+```bash
+pre-commit-check --init
+# 或
+pre-commit-check-init
+```
+
+**注意**：全局安装后，husky 仍需在项目中本地安装：
+
+```bash
+npm install husky --save-dev
+npx husky install
+```
+
+详细说明请参考 [GLOBAL_INSTALL.md](./GLOBAL_INSTALL.md)
 
 #### 3. 配置检查规则
 

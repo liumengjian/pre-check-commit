@@ -96,10 +96,10 @@ function parseVueFile(content) {
   // 提取 <script> 部分
   const scriptMatch = content.match(/<script[^>]*>([\s\S]*?)<\/script>/);
   const templateMatch = content.match(/<template[^>]*>([\s\S]*?)<\/template>/);
-  
+
   let ast = null;
   let scriptContent = '';
-  
+
   if (scriptMatch) {
     scriptContent = scriptMatch[1];
     try {
@@ -130,7 +130,7 @@ function parseJSFile(content, ext) {
     if (ext === '.tsx' || ext === '.jsx') {
       plugins.push('jsx');
     }
-    
+
     const ast = parser.parse(content, {
       sourceType: 'module',
       plugins
@@ -168,7 +168,7 @@ function checkRule1(filePath, parsed, diff) {
   // 检查是否在 diff 中新增了按钮，或者检查所有按钮（如果文件是新增的）
   const isNewFile = !diff || !diff.includes('---') || (diff && diff.split('\n').filter(l => l.startsWith('+++')).length > 0);
   const hasNewButton = diff && diff.includes('+') && (diff.includes('button') || diff.includes('Button') || diff.includes('@click') || diff.includes('onClick'));
-  
+
   // 如果既不是新文件，也没有新增按钮，则跳过检查
   if (!isNewFile && !hasNewButton) {
     return null;
@@ -183,7 +183,7 @@ function checkRule1(filePath, parsed, diff) {
   ];
 
   const handlers = new Set();
-  
+
   // 如果是新文件，检查整个文件内容
   if (isNewFile) {
     for (const pattern of buttonPatterns) {
@@ -200,7 +200,7 @@ function checkRule1(filePath, parsed, diff) {
     const diffLines = diff.split('\n');
     const addedLines = [];
     let currentLineOffset = 0;
-    
+
     for (let i = 0; i < diffLines.length; i++) {
       const line = diffLines[i];
       if (line.startsWith('@@')) {
@@ -216,7 +216,7 @@ function checkRule1(filePath, parsed, diff) {
         currentLineOffset++;
       }
     }
-    
+
     // 检查新增的行中是否包含按钮
     for (const addedLine of addedLines) {
       for (const pattern of buttonPatterns) {
@@ -236,14 +236,14 @@ function checkRule1(filePath, parsed, diff) {
       FunctionDeclaration(path) {
         const funcName = path.node.id?.name;
         if (!funcName) return;
-        
+
         handlers.forEach(handler => {
           // 匹配处理函数名（支持 handleSubmit、onSubmit、submit 等多种格式）
           const handlerName = handler.name.replace(/['"()]/g, '').trim();
-          if (funcName === handlerName || 
-              handlerName.includes(funcName) || 
-              funcName.toLowerCase() === handlerName.toLowerCase() ||
-              handlerName.toLowerCase().includes(funcName.toLowerCase())) {
+          if (funcName === handlerName ||
+            handlerName.includes(funcName) ||
+            funcName.toLowerCase() === handlerName.toLowerCase() ||
+            handlerName.toLowerCase().includes(funcName.toLowerCase())) {
             checkHandlerForRule1(path, handler, errors, filePath, parsed);
           }
         });
@@ -254,9 +254,9 @@ function checkRule1(filePath, parsed, diff) {
           const funcName = parent.id.name;
           handlers.forEach(handler => {
             const handlerName = handler.name.replace(/['"()]/g, '').trim();
-            if (funcName === handlerName || 
-                handlerName.includes(funcName) || 
-                funcName.toLowerCase() === handlerName.toLowerCase()) {
+            if (funcName === handlerName ||
+              handlerName.includes(funcName) ||
+              funcName.toLowerCase() === handlerName.toLowerCase()) {
               checkHandlerForRule1(path, handler, errors, filePath, parsed);
             }
           });
@@ -268,9 +268,9 @@ function checkRule1(filePath, parsed, diff) {
           const funcName = parent.id.name;
           handlers.forEach(handler => {
             const handlerName = handler.name.replace(/['"()]/g, '').trim();
-            if (funcName === handlerName || 
-                handlerName.includes(funcName) || 
-                funcName.toLowerCase() === handlerName.toLowerCase()) {
+            if (funcName === handlerName ||
+              handlerName.includes(funcName) ||
+              funcName.toLowerCase() === handlerName.toLowerCase()) {
               checkHandlerForRule1(path, handler, errors, filePath, parsed);
             }
           });
@@ -280,12 +280,12 @@ function checkRule1(filePath, parsed, diff) {
       ObjectMethod(path) {
         const funcName = path.node.key?.name;
         if (!funcName) return;
-        
+
         handlers.forEach(handler => {
           const handlerName = handler.name.replace(/['"()]/g, '').trim();
-          if (funcName === handlerName || 
-              handlerName.includes(funcName) || 
-              funcName.toLowerCase() === handlerName.toLowerCase()) {
+          if (funcName === handlerName ||
+            handlerName.includes(funcName) ||
+            funcName.toLowerCase() === handlerName.toLowerCase()) {
             checkHandlerForRule1(path, handler, errors, filePath, parsed);
           }
         });
@@ -301,7 +301,7 @@ function checkRule1(filePath, parsed, diff) {
  */
 function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
   const funcName = handler.name;
-  
+
   // 检查白名单
   const whitelistKeywords = config.rule1.whitelist.keywords || [];
   if (whitelistKeywords.some(keyword => funcName.includes(keyword))) {
@@ -310,20 +310,20 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
 
   let hasApiCall = false;
   let hasProtection = false;
-  
+
   // 检查函数开始处是否有状态锁检查（如 if (isSubmitting) return;）
   const funcBody = path.node.body;
   if (t.isBlockStatement(funcBody) && funcBody.body.length > 0) {
     const firstStmt = funcBody.body[0];
     if (t.isIfStatement(firstStmt)) {
       const test = firstStmt.test;
-      if (t.isIdentifier(test) || 
-          (t.isUnaryExpression(test) && t.isIdentifier(test.argument)) ||
-          (t.isBinaryExpression(test) && t.isIdentifier(test.left))) {
-        const varName = t.isIdentifier(test) ? test.name : 
-                       (t.isUnaryExpression(test) ? test.argument.name : test.left.name);
-        if (varName && (varName.includes('Submitting') || varName.includes('Loading') || 
-            varName.includes('loading') || varName.includes('submitting'))) {
+      if (t.isIdentifier(test) ||
+        (t.isUnaryExpression(test) && t.isIdentifier(test.argument)) ||
+        (t.isBinaryExpression(test) && t.isIdentifier(test.left))) {
+        const varName = t.isIdentifier(test) ? test.name :
+          (t.isUnaryExpression(test) ? test.argument.name : test.left.name);
+        if (varName && (varName.includes('Submitting') || varName.includes('Loading') ||
+          varName.includes('loading') || varName.includes('submitting'))) {
           hasProtection = true; // 函数开始处有状态锁检查
         }
       }
@@ -336,11 +336,11 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
       // 使用新的 isApiCall 函数检测接口调用
       if (isApiCall(callPath)) {
         hasApiCall = true;
-        
+
         // 检查是否有防重复提交保护
         // 1. 检查是否有防抖/节流包装
         // 2. 检查是否有状态锁
-        
+
         // 检查防抖/节流
         let currentPath = callPath;
         while (currentPath && currentPath.parentPath) {
@@ -370,19 +370,19 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
           currentPath = currentPath.parentPath;
           if (!currentPath) break;
         }
-        
+
         // 检查状态锁（在接口调用前后）
         const parentFunc = callPath.findParent(p => p.isFunction());
         if (parentFunc && t.isBlockStatement(parentFunc.node.body)) {
           const statements = parentFunc.node.body.body;
           const callIndex = statements.findIndex(s => {
             if (t.isExpressionStatement(s)) {
-              return s.expression === callPath.node || 
-                     (t.isCallExpression(s.expression) && s.expression === callPath.node);
+              return s.expression === callPath.node ||
+                (t.isCallExpression(s.expression) && s.expression === callPath.node);
             }
             return false;
           });
-          
+
           if (callIndex >= 0) {
             // 检查调用前是否有状态锁设为 true
             for (let i = 0; i < callIndex; i++) {
@@ -392,11 +392,11 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                 const right = stmt.expression.right;
                 if (t.isIdentifier(left)) {
                   const varName = left.name;
-                  if ((varName.includes('Submitting') || varName.includes('Loading') || 
-                       varName.includes('loading') || varName.includes('submitting')) &&
-                      (t.isBooleanLiteral(right) && right.value === true ||
-                       t.isUnaryExpression(right) && right.operator === '!' && 
-                       t.isBooleanLiteral(right.argument) && right.argument.value === false)) {
+                  if ((varName.includes('Submitting') || varName.includes('Loading') ||
+                    varName.includes('loading') || varName.includes('submitting')) &&
+                    (t.isBooleanLiteral(right) && right.value === true ||
+                      t.isUnaryExpression(right) && right.operator === '!' &&
+                      t.isBooleanLiteral(right.argument) && right.argument.value === false)) {
                     // 检查调用后是否有状态锁设为 false（在 then/catch/finally 中）
                     // 检查后续语句或 then/catch 回调
                     hasProtection = true; // 暂时认为有保护，更详细的检查需要分析 Promise 链
@@ -410,7 +410,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
       }
     }
   });
-  
+
   // 检查模板中是否有 disabled 绑定（对于 Vue 文件）
   if (parsed.template) {
     const handlerName = handler.name.replace(/['"()]/g, '').trim();
@@ -443,11 +443,11 @@ function checkRule2(filePath, parsed, diff) {
 
   // 检查是否是新增文件或新增了初始化逻辑
   // 新增文件的判断：diff 以 +++ 开头，或者没有 --- 行
-  const isNewFile = !diff || (!diff.includes('---') && diff.includes('+++')) || 
-                     (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
-  const hasInitLogic = diff && (diff.includes('created') || diff.includes('mounted') || 
-                       diff.includes('useEffect') || diff.includes('componentDidMount'));
-  
+  const isNewFile = !diff || (!diff.includes('---') && diff.includes('+++')) ||
+    (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
+  const hasInitLogic = diff && (diff.includes('created') || diff.includes('mounted') ||
+    diff.includes('useEffect') || diff.includes('componentDidMount'));
+
   // 检查是否有useEffect（即使不是新增文件，只要有useEffect也检查）
   const hasUseEffectInContent = content.includes('useEffect');
 
@@ -456,14 +456,14 @@ function checkRule2(filePath, parsed, diff) {
   }
 
   // 检查是否是列表页或详情页（可选，如果不是列表页/详情页，只要有useEffect中的接口调用也检查）
-  const isListPage = (template && (template.includes('el-table') || template.includes('<Table'))) || 
-                     content.includes('.map(') || content.includes('v-for');
-  const isDetailPage = content.includes('getDetail') || content.includes('fetchDetail') || 
-                       content.includes('queryDetail') || content.includes('详情');
-  
+  const isListPage = (template && (template.includes('el-table') || template.includes('<Table'))) ||
+    content.includes('.map(') || content.includes('v-for');
+  const isDetailPage = content.includes('getDetail') || content.includes('fetchDetail') ||
+    content.includes('queryDetail') || content.includes('详情');
+
   // 检查是否有useEffect
   const hasUseEffect = content.includes('useEffect');
-  
+
   // 如果不是列表页/详情页，也没有useEffect，则跳过检查
   if (!isListPage && !isDetailPage && !hasUseEffect) {
     return null;
@@ -478,8 +478,8 @@ function checkRule2(filePath, parsed, diff) {
   if (ast) {
     let hasApiCallInEffect = false;
     let hasLoading = false;
-    const loadingMethods = config.rule2.customKeywords.loadingMethods || 
-                          ['showLoading', 'hideLoading', 'loading', 'setLoading'];
+    const loadingMethods = config.rule2.customKeywords.loadingMethods ||
+      ['showLoading', 'hideLoading', 'loading', 'setLoading'];
 
     // 检查 useEffect 中的接口调用
     // 先找到所有接口调用，然后检查它们是否在 useEffect 中
@@ -489,24 +489,24 @@ function checkRule2(filePath, parsed, diff) {
         if (!isApiCall(callPath)) {
           return;
         }
-        
+
         // 检查是否在 useEffect 的回调函数中
         let currentPath = callPath;
         let inUseEffect = false;
         let parentFunc = null;
-        
+
         // 向上查找，看是否在 useEffect 的回调中
         while (currentPath && currentPath.parentPath) {
           // 检查是否是函数表达式或箭头函数
-          if (currentPath.parentPath.isArrowFunctionExpression() || 
-              currentPath.parentPath.isFunctionExpression()) {
+          if (currentPath.parentPath.isArrowFunctionExpression() ||
+            currentPath.parentPath.isFunctionExpression()) {
             parentFunc = currentPath.parentPath;
             // 继续向上查找，看是否是 useEffect 的回调
             let checkPath = currentPath.parentPath.parentPath;
             while (checkPath) {
-              if (checkPath.isCallExpression() && 
-                  t.isIdentifier(checkPath.node.callee) && 
-                  checkPath.node.callee.name === 'useEffect') {
+              if (checkPath.isCallExpression() &&
+                t.isIdentifier(checkPath.node.callee) &&
+                checkPath.node.callee.name === 'useEffect') {
                 inUseEffect = true;
                 break;
               }
@@ -516,15 +516,15 @@ function checkRule2(filePath, parsed, diff) {
           }
           currentPath = currentPath.parentPath;
         }
-        
+
         if (inUseEffect && parentFunc) {
           hasApiCallInEffect = true;
-          
+
           // 检查是否有 loading
           const funcBody = parentFunc.node.body;
           if (t.isBlockStatement(funcBody)) {
             const statements = funcBody.body;
-            
+
             // 检查调用前是否有 showLoading
             for (const stmt of statements) {
               if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
@@ -535,7 +535,7 @@ function checkRule2(filePath, parsed, diff) {
                 }
               }
             }
-            
+
             // 检查接口调用是否在 Promise 链中
             currentPath = callPath;
             while (currentPath && currentPath.parentPath) {
@@ -607,71 +607,86 @@ function checkRule3(filePath, parsed, diff) {
       if (!isApiCall(callPath)) {
         return;
       }
-      
+
       const callee = callPath.node.callee;
       const methodName = getMethodName(callee);
-      
+
       // 检查是否是 POST/PUT 请求
-      const isPostPut = methodName.toLowerCase().includes('post') || 
-                        methodName.toLowerCase().includes('put') ||
-                        methodName.toLowerCase().includes('delete') ||
-                        // 检查 ajax.post(), ajax.put() 等
-                        (methodName.includes('ajax.') && (
-                          methodName.toLowerCase().includes('.post') ||
-                          methodName.toLowerCase().includes('.put') ||
-                          methodName.toLowerCase().includes('.delete')
-                        )) ||
-                        // 检查 props.dispatch 中的 type 是否包含操作关键词
-                        (methodName.includes('dispatch') && callPath.node.arguments.some(arg => {
-                          if (t.isObjectExpression(arg)) {
-                            return arg.properties.some(prop => {
-                              if (t.isObjectProperty(prop) && t.isIdentifier(prop.key) && prop.key.name === 'type') {
-                                const value = prop.value;
-                                if (t.isStringLiteral(value)) {
-                                  const typeValue = value.value.toLowerCase();
-                                  // 检查 type 中是否包含操作关键词
-                                  return typeValue.includes('add') || typeValue.includes('create') ||
-                                         typeValue.includes('update') || typeValue.includes('edit') ||
-                                         typeValue.includes('delete') || typeValue.includes('remove') ||
-                                         typeValue.includes('submit') || typeValue.includes('save');
-                                }
-                              }
-                              return false;
-                            });
-                          }
-                          return false;
-                        })) ||
-                        // 检查 Action 方法名是否包含操作关键词
-                        (methodName.endsWith('Action') && (
-                          methodName.toLowerCase().includes('add') ||
-                          methodName.toLowerCase().includes('create') ||
-                          methodName.toLowerCase().includes('update') ||
-                          methodName.toLowerCase().includes('edit') ||
-                          methodName.toLowerCase().includes('delete') ||
-                          methodName.toLowerCase().includes('remove') ||
-                          methodName.toLowerCase().includes('submit') ||
-                          methodName.toLowerCase().includes('save') ||
-                          methodName.toLowerCase().includes('post') ||
-                          methodName.toLowerCase().includes('put')
-                        )) ||
-                        // 检查 axios({ method: 'POST' }) 或 axios({ method: 'PUT' })
-                        (methodName.includes('axios') && callPath.node.arguments.some(arg => {
-                          if (t.isObjectExpression(arg)) {
-                            return arg.properties.some(prop => {
-                              if (t.isObjectProperty(prop) && t.isIdentifier(prop.key) && 
-                                  (prop.key.name === 'method' || prop.key.name === 'type')) {
-                                const value = prop.value;
-                                if (t.isStringLiteral(value)) {
-                                  return value.value.toUpperCase() === 'POST' || 
-                                         value.value.toUpperCase() === 'PUT' ||
-                                         value.value.toUpperCase() === 'DELETE';
-                                }
-                              }
-                              return false;
-                            });
-                          }
-                          return false;
-                        }));
+      // 排除常见的方法名误报（如 toString, includes, input, output 等）
+      const lowerMethodName = methodName.toLowerCase();
+      const excludePatterns = ['tostring', 'includes', 'input', 'output'];
+      const isExcludedMethod = excludePatterns.some(pattern =>
+        lowerMethodName === pattern ||
+        lowerMethodName.endsWith('.' + pattern) ||
+        lowerMethodName.includes('.' + pattern + '(')
+      );
+
+      // 如果方法名在排除列表中，跳过检查
+      if (isExcludedMethod) {
+        return;
+      }
+
+      const isPostPut =
+        // 检查 http.post(), http.put(), axios.post() 等（方法名以 .post/.put/.delete 结尾）
+        (methodName.toLowerCase().match(/\.(post|put|delete|patch)$/)) ||
+        // 检查 ajax.post(), ajax.put() 等
+        (methodName.includes('ajax.') && (
+          methodName.toLowerCase().includes('.post') ||
+          methodName.toLowerCase().includes('.put') ||
+          methodName.toLowerCase().includes('.delete')
+        )) ||
+        // 检查 props.dispatch 中的 type 是否包含操作关键词
+        (methodName.includes('dispatch') && callPath.node.arguments.some(arg => {
+          if (t.isObjectExpression(arg)) {
+            return arg.properties.some(prop => {
+              if (t.isObjectProperty(prop) && t.isIdentifier(prop.key) && prop.key.name === 'type') {
+                const value = prop.value;
+                if (t.isStringLiteral(value)) {
+                  const typeValue = value.value.toLowerCase();
+                  // 检查 type 中是否包含操作关键词
+                  return typeValue.includes('add') || typeValue.includes('create') ||
+                    typeValue.includes('update') || typeValue.includes('edit') ||
+                    typeValue.includes('delete') || typeValue.includes('remove') ||
+                    typeValue.includes('submit') || typeValue.includes('save');
+                }
+              }
+              return false;
+            });
+          }
+          return false;
+        })) ||
+        // 检查 Action 方法名是否包含操作关键词
+        (methodName.endsWith('Action') && (
+          methodName.toLowerCase().includes('add') ||
+          methodName.toLowerCase().includes('create') ||
+          methodName.toLowerCase().includes('update') ||
+          methodName.toLowerCase().includes('edit') ||
+          methodName.toLowerCase().includes('delete') ||
+          methodName.toLowerCase().includes('remove') ||
+          methodName.toLowerCase().includes('submit') ||
+          methodName.toLowerCase().includes('save') ||
+          // 只检查明确的 HTTP 方法名，避免误报（如 output.toString）
+          methodName.toLowerCase().match(/\.(post|put)$/) ||
+          methodName.toLowerCase().match(/^(post|put)/)
+        )) ||
+        // 检查 axios({ method: 'POST' }) 或 axios({ method: 'PUT' })
+        (methodName.includes('axios') && callPath.node.arguments.some(arg => {
+          if (t.isObjectExpression(arg)) {
+            return arg.properties.some(prop => {
+              if (t.isObjectProperty(prop) && t.isIdentifier(prop.key) &&
+                (prop.key.name === 'method' || prop.key.name === 'type')) {
+                const value = prop.value;
+                if (t.isStringLiteral(value)) {
+                  return value.value.toUpperCase() === 'POST' ||
+                    value.value.toUpperCase() === 'PUT' ||
+                    value.value.toUpperCase() === 'DELETE';
+                }
+              }
+              return false;
+            });
+          }
+          return false;
+        }));
 
       if (isPostPut) {
         // 检查操作关键词
@@ -689,7 +704,7 @@ function checkRule3(filePath, parsed, diff) {
         if (hasOperationKeyword || isPostPut) {
           // 检查成功回调中是否有轻提示
           let hasSuccessTip = false;
-          
+
           // 检查 .then() 回调
           const memberExpr = callPath.findParent(p => p.isMemberExpression());
           if (memberExpr && memberExpr.parentPath && t.isCallExpression(memberExpr.parentPath.node)) {
@@ -701,15 +716,15 @@ function checkRule3(filePath, parsed, diff) {
               }
             }
           }
-          
+
           // 检查 async/await 后的代码
           if (!hasSuccessTip && parentFunc && parentFunc.node.async) {
             const funcBody = parentFunc.node.body;
             if (t.isBlockStatement(funcBody)) {
-              const callIndex = funcBody.body.findIndex(s => 
+              const callIndex = funcBody.body.findIndex(s =>
                 s === callPath.node || (t.isExpressionStatement(s) && s.expression === callPath.node)
               );
-              
+
               // 检查调用后的语句
               for (let i = callIndex + 1; i < funcBody.body.length; i++) {
                 const stmt = funcBody.body[i];
@@ -743,9 +758,9 @@ function checkRule3(filePath, parsed, diff) {
  * 检查回调函数中是否有成功提示
  */
 function checkForSuccessTip(callback) {
-  const successMethods = config.rule3.customKeywords.successMethods || 
-                        ['message.success', '$message.success', 'showSuccessTip', 'ElMessage.success', 'Message.success'];
-  
+  const successMethods = config.rule3.customKeywords.successMethods ||
+    ['message.success', '$message.success', 'showSuccessTip', 'ElMessage.success', 'Message.success'];
+
   if (t.isArrowFunctionExpression(callback) || t.isFunctionExpression(callback)) {
     const body = callback.body;
     if (t.isBlockStatement(body)) {
@@ -758,7 +773,7 @@ function checkForSuccessTip(callback) {
       return checkStatementForSuccessTip(t.expressionStatement(body));
     }
   }
-  
+
   return false;
 }
 
@@ -766,16 +781,16 @@ function checkForSuccessTip(callback) {
  * 检查语句中是否有成功提示
  */
 function checkStatementForSuccessTip(stmt) {
-  const successMethods = config.rule3.customKeywords.successMethods || 
-                        ['message.success', '$message.success', 'showSuccessTip', 'ElMessage.success', 'Message.success'];
-  
+  const successMethods = config.rule3.customKeywords.successMethods ||
+    ['message.success', '$message.success', 'showSuccessTip', 'ElMessage.success', 'Message.success'];
+
   if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
     const methodName = getMethodName(stmt.expression.callee);
     if (successMethods.some(m => methodName.includes(m))) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -789,17 +804,17 @@ function checkRule4(filePath, parsed, diff) {
   const { type, ast, template = '', content } = parsed;
 
   // 检查是否使用了 Table 组件
-  const hasTableComponent = (template && (template.includes('el-table') || template.includes('<Table'))) || 
-                            content.includes('ElTable') || content.includes('Table') ||
-                            (content.includes('antd') && content.includes('Table'));
+  const hasTableComponent = (template && (template.includes('el-table') || template.includes('<Table'))) ||
+    content.includes('ElTable') || content.includes('Table') ||
+    (content.includes('antd') && content.includes('Table'));
 
   if (hasTableComponent) {
     return null; // 使用了 Table 组件，跳过检查
   }
 
   // 检查是否有列表渲染
-  const hasListRender = (template && template.includes('v-for')) || content.includes('.map(') || 
-                        content.includes('forEach') || content.includes('for (');
+  const hasListRender = (template && template.includes('v-for')) || content.includes('.map(') ||
+    content.includes('forEach') || content.includes('for (');
 
   if (!hasListRender) {
     return null;
@@ -814,11 +829,11 @@ function checkRule4(filePath, parsed, diff) {
   // 检查是否有空状态处理
   const emptyComponents = config.rule4.customKeywords.emptyComponents || ['Empty', 'NoData', 'EmptyTip'];
   const hasEmptyState = (template && (template.includes('暂无数据') || template.includes('暂无'))) ||
-                       content.includes('暂无数据') || content.includes('暂无') ||
-                       emptyComponents.some(comp => (template && template.includes(comp)) || content.includes(comp)) ||
-                       (template && (template.includes('v-if="!') || template.includes('v-if="list.length === 0'))) ||
-                       content.includes('length === 0') || content.includes('!list') ||
-                       content.includes('list.length === 0');
+    content.includes('暂无数据') || content.includes('暂无') ||
+    emptyComponents.some(comp => (template && template.includes(comp)) || content.includes(comp)) ||
+    (template && (template.includes('v-if="!') || template.includes('v-if="list.length === 0'))) ||
+    content.includes('length === 0') || content.includes('!list') ||
+    content.includes('list.length === 0');
 
   if (!hasEmptyState) {
     const line = ast?.loc?.start.line || 1;
@@ -841,8 +856,8 @@ function getMethodName(callee) {
   if (t.isIdentifier(callee)) {
     return callee.name;
   } else if (t.isMemberExpression(callee)) {
-    const object = t.isIdentifier(callee.object) ? callee.object.name : 
-                   t.isMemberExpression(callee.object) ? getMethodName(callee.object) : '';
+    const object = t.isIdentifier(callee.object) ? callee.object.name :
+      t.isMemberExpression(callee.object) ? getMethodName(callee.object) : '';
     const property = t.isIdentifier(callee.property) ? callee.property.name : '';
     return `${object}.${property}`;
   } else if (t.isCallExpression(callee)) {
@@ -867,12 +882,12 @@ function getMethodName(callee) {
 function isApiCall(callPath) {
   const callee = callPath.node.callee;
   const methodName = getMethodName(callee);
-  
+
   // 获取配置的请求方法关键词
-  const requestMethods = config.rule1?.customKeywords?.requestMethods || 
-                        config.rule2?.customKeywords?.requestMethods ||
-                        ['fetch', 'axios', 'request', 'http', 'api'];
-  
+  const requestMethods = config.rule1?.customKeywords?.requestMethods ||
+    config.rule2?.customKeywords?.requestMethods ||
+    ['fetch', 'axios', 'request', 'http', 'api'];
+
   // 1. 检查常见的 HTTP 请求方法
   const httpMethods = ['post', 'get', 'put', 'delete', 'patch', 'request'];
   if (httpMethods.some(method => methodName.toLowerCase().includes(method))) {
@@ -882,54 +897,54 @@ function isApiCall(callPath) {
       return true;
     }
   }
-  
+
   // 2. 检查 props.xxxAction() 模式（dva-runtime declareRequest）
   if (t.isMemberExpression(callee)) {
     const object = callee.object;
     const property = callee.property;
-    
+
     // props.xxxAction() 或 this.props.xxxAction()
     if (t.isIdentifier(object) && object.name === 'props') {
       if (t.isIdentifier(property) && property.name.endsWith('Action')) {
         return true;
       }
     }
-    
+
     // this.props.xxxAction()
     if (t.isMemberExpression(object)) {
       // object 应该是 this.props，检查 object.object 是否是 this
-      const isThisProps = (t.isThisExpression(object.object) || 
-                          (t.isIdentifier(object.object) && object.object.name === 'this')) &&
-                          t.isIdentifier(object.property) && 
-                          object.property.name === 'props';
+      const isThisProps = (t.isThisExpression(object.object) ||
+        (t.isIdentifier(object.object) && object.object.name === 'this')) &&
+        t.isIdentifier(object.property) &&
+        object.property.name === 'props';
       if (isThisProps && t.isIdentifier(property) && property.name.endsWith('Action')) {
         return true;
       }
     }
-    
+
     // http.Post(), http.Get() 等
     if (t.isIdentifier(object) && object.name === 'http') {
       if (t.isIdentifier(property) && ['Post', 'Get', 'Put', 'Delete', 'Patch'].includes(property.name)) {
         return true;
       }
     }
-    
+
     // this.$http.post(), this.$http.get() 等
-    if (t.isMemberExpression(object) && 
-        t.isIdentifier(object.property) && object.property.name === '$http') {
+    if (t.isMemberExpression(object) &&
+      t.isIdentifier(object.property) && object.property.name === '$http') {
       if (t.isIdentifier(property) && httpMethods.includes(property.name.toLowerCase())) {
         return true;
       }
     }
-    
+
     // $.ajax(), jQuery.ajax()
-    if ((t.isIdentifier(object) && object.name === '$') || 
-        (t.isIdentifier(object) && object.name === 'jQuery')) {
+    if ((t.isIdentifier(object) && object.name === '$') ||
+      (t.isIdentifier(object) && object.name === 'jQuery')) {
       if (t.isIdentifier(property) && property.name === 'ajax') {
         return true;
       }
     }
-    
+
     // ajax.post(), ajax.get() 等（自定义 ajax 对象）
     if (t.isIdentifier(object) && object.name === 'ajax') {
       if (t.isIdentifier(property) && httpMethods.includes(property.name.toLowerCase())) {
@@ -937,36 +952,36 @@ function isApiCall(callPath) {
       }
     }
   }
-  
+
   // 3. 检查 axios({}) 或 axios.post() 等
   if (t.isIdentifier(callee) && callee.name === 'axios') {
     return true;
   }
-  
+
   // 4. 检查 fetch()
   if (t.isIdentifier(callee) && callee.name === 'fetch') {
     return true;
   }
-  
+
   // 5. 检查 fetchDataApi()
   if (t.isIdentifier(callee) && callee.name === 'fetchDataApi') {
     return true;
   }
-  
+
   // 6. 检查 props.dispatch()
   if (t.isMemberExpression(callee)) {
     const object = callee.object;
     const property = callee.property;
-    
-    if (t.isIdentifier(object) && object.name === 'props' && 
-        t.isIdentifier(property) && property.name === 'dispatch') {
+
+    if (t.isIdentifier(object) && object.name === 'props' &&
+      t.isIdentifier(property) && property.name === 'dispatch') {
       // 检查 dispatch 的参数是否是对象，且包含 type 字段
       const args = callPath.node.arguments;
       if (args.length > 0 && t.isObjectExpression(args[0])) {
         const props = args[0].properties;
-        const hasType = props.some(prop => 
-          t.isObjectProperty(prop) && 
-          t.isIdentifier(prop.key) && 
+        const hasType = props.some(prop =>
+          t.isObjectProperty(prop) &&
+          t.isIdentifier(prop.key) &&
           prop.key.name === 'type'
         );
         if (hasType) {
@@ -975,14 +990,14 @@ function isApiCall(callPath) {
       }
     }
   }
-  
+
   // 7. 检查 XMLHttpRequest 相关调用
-  if (t.isNewExpression(callee) && 
-      t.isIdentifier(callee.callee) && 
-      callee.callee.name === 'XMLHttpRequest') {
+  if (t.isNewExpression(callee) &&
+    t.isIdentifier(callee.callee) &&
+    callee.callee.name === 'XMLHttpRequest') {
     return true;
   }
-  
+
   // 检查 xhr.open(), xhr.send() 等方法调用
   if (t.isMemberExpression(callee)) {
     const property = callee.property;
@@ -991,14 +1006,14 @@ function isApiCall(callPath) {
       const object = callee.object;
       if (t.isIdentifier(object)) {
         // 简单检查：如果变量名包含 xhr 或 http，认为是 XMLHttpRequest
-        if (object.name.toLowerCase().includes('xhr') || 
-            object.name.toLowerCase().includes('http')) {
+        if (object.name.toLowerCase().includes('xhr') ||
+          object.name.toLowerCase().includes('http')) {
           return true;
         }
       }
     }
   }
-  
+
   // 8. 检查配置中的自定义请求方法关键词
   if (requestMethods.some(method => methodName.toLowerCase().includes(method.toLowerCase()))) {
     // 排除非接口调用的方法
@@ -1007,7 +1022,7 @@ function isApiCall(callPath) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -1027,14 +1042,14 @@ function runChecks() {
     if (!fileExtensions.includes(ext)) {
       return false;
     }
-    
+
     // 检查忽略模式
     for (const pattern of ignorePatterns) {
       if (file.includes(pattern.replace('/**', ''))) {
         return false;
       }
     }
-    
+
     return true;
   });
 
@@ -1087,7 +1102,7 @@ function runChecks() {
   // 输出错误信息
   if (allErrors.length > 0) {
     console.log(chalk.red('\n❌ 代码检查未通过，发现以下问题：\n'));
-    
+
     allErrors.forEach((error, index) => {
       console.log(chalk.red(`【规则 ${error.rule} 不通过】- ${getRuleName(error.rule)}`));
       console.log(chalk.white(`文件：${error.file}`));

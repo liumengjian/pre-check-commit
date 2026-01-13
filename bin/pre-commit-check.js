@@ -7,9 +7,24 @@
  */
 
 const path = require('path');
-const { runChecks } = require('../commit-check-core.js');
+const fs = require('fs');
 
-// 执行检查
-const success = runChecks();
-process.exit(success ? 0 : 1);
+// 检查是否是初始化命令
+const args = process.argv.slice(2);
+if (args.includes('--init') || args.includes('init')) {
+  // 执行初始化
+  const installScriptPath = path.join(__dirname, 'install.js');
+  if (fs.existsSync(installScriptPath)) {
+    require(installScriptPath);
+    process.exit(0);
+  } else {
+    console.error('❌ 无法找到安装脚本');
+    process.exit(1);
+  }
+} else {
+  // 执行检查
+  const { runChecks } = require('../commit-check-core.js');
+  const success = runChecks();
+  process.exit(success ? 0 : 1);
+}
 

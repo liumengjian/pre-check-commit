@@ -770,13 +770,17 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
             if (declareRequestInfo && declareRequestInfo.loadingName) {
               // 检查页面中是否使用了这个 loading（在按钮上绑定）
               const handlerName = handler.name.replace(/['"()]/g, '').trim();
+              // 对于 JSX 文件，template 可能是 undefined，使用 content
+              const templateContent = parsed.template || parsed.content || '';
+              const fullContent = parsed.content || '';
+              
               // 检查按钮是否绑定了这个 loading
               const buttonLoadingPattern = new RegExp(`<Button[^>]*onClick.*${handlerName}[^>]*loading=\\{([^}]*\\b${declareRequestInfo.loadingName}\\b[^}]*)\\}`, 'i');
               const buttonLoadingPattern2 = new RegExp(`<Button[^>]*loading=\\{([^}]*\\b${declareRequestInfo.loadingName}\\b[^}]*)\\}[^>]*onClick.*${handlerName}`, 'i');
               
-              if (buttonLoadingPattern.test(parsed.template || parsed.content) || 
-                  buttonLoadingPattern2.test(parsed.template || parsed.content) ||
-                  checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, parsed.content, parsed.template)) {
+              if (buttonLoadingPattern.test(templateContent) || 
+                  buttonLoadingPattern2.test(templateContent) ||
+                  checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, fullContent, templateContent)) {
                 foundDeclareRequestLoading = true;
                 hasProtection = true;
                 apiCallPath.stop();
@@ -948,7 +952,9 @@ function checkRule2(filePath, parsed, diff) {
               const declareRequestInfo = findDeclareRequestLoading(actionName, filePath, ast);
               if (declareRequestInfo && declareRequestInfo.loadingName) {
                 // 检查页面中是否使用了这个 loading
-                if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, template)) {
+                // 对于 JSX 文件，template 可能是 undefined，使用 content
+                const templateContent = template || content || '';
+                if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, templateContent)) {
                   hasLoading = true;
                 }
               } else {
@@ -956,7 +962,9 @@ function checkRule2(filePath, parsed, diff) {
                 const declareRequestInfoAny = findDeclareRequestInfo(actionName, filePath, ast);
                 if (declareRequestInfoAny && declareRequestInfoAny.loadingName) {
                   // 检查页面中是否使用了这个 loading（即使第一个参数不是 'loading'）
-                  if (checkDeclareRequestLoadingUsage(declareRequestInfoAny.loadingName, content, template)) {
+                  // 对于 JSX 文件，template 可能是 undefined，使用 content
+                  const templateContent = template || content || '';
+                  if (checkDeclareRequestLoadingUsage(declareRequestInfoAny.loadingName, content, templateContent)) {
                     hasLoading = true;
                   }
                 }
@@ -1325,14 +1333,23 @@ function resolveNamespaceFile(importPath, currentFilePath) {
       importPath = importPath.replace('~/', 'src/');
     }
     
-    // 尝试多个可能的路径
+    // 尝试多个可能的路径（包括 index.js）
     const possiblePaths = [
+      // 直接文件路径：src/enumerate/namespace.js
       path.join(projectRoot, importPath + '.js'),
       path.join(projectRoot, importPath + '.ts'),
       path.join(projectRoot, importPath + '.jsx'),
       path.join(projectRoot, importPath + '.tsx'),
+      // 目录下的 index 文件：src/enumerate/namespace/index.js
+      path.join(projectRoot, importPath, 'index.js'),
+      path.join(projectRoot, importPath, 'index.ts'),
+      path.join(projectRoot, importPath, 'index.jsx'),
+      path.join(projectRoot, importPath, 'index.tsx'),
+      // 相对路径
       path.join(path.dirname(currentFilePath), importPath + '.js'),
       path.join(path.dirname(currentFilePath), importPath + '.ts'),
+      path.join(path.dirname(currentFilePath), importPath, 'index.js'),
+      path.join(path.dirname(currentFilePath), importPath, 'index.ts'),
     ];
     
     for (const possiblePath of possiblePaths) {

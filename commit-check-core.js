@@ -441,6 +441,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
             
             for (let i = 0; i < callIndex; i++) {
               const stmt = statements[i];
+              
+              // 检查赋值语句：loading = true 或 this.loading = true
               if (t.isExpressionStatement(stmt) && t.isAssignmentExpression(stmt.expression)) {
                 const left = stmt.expression.left;
                 const right = stmt.expression.right;
@@ -483,6 +485,64 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                   }
                 }
               }
+              
+              // 检查函数调用：setLoading(true) 或 setState({ loading: true })
+              if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
+                const callee = stmt.expression.callee;
+                const args = stmt.expression.arguments;
+                
+                // 检查 setLoading(true) 模式
+                if (t.isIdentifier(callee)) {
+                  const funcName = callee.name;
+                  const funcNameLower = funcName.toLowerCase();
+                  // 检查是否是 setLoading, setSubmitting 等函数
+                  const isSetLoadingFunc = funcNameLower.includes('setloading') || 
+                                          funcNameLower.includes('setsubmitting') ||
+                                          (loadingVarName && (
+                                            funcNameLower === 'set' + loadingVarName.toLowerCase() ||
+                                            funcNameLower === 'set' + loadingVarName.toLowerCase().charAt(0).toUpperCase() + loadingVarName.toLowerCase().slice(1)
+                                          ));
+                  
+                  if (isSetLoadingFunc && args.length > 0) {
+                    const arg = args[0];
+                    // 检查参数是否为 true
+                    if (t.isBooleanLiteral(arg) && arg.value === true) {
+                      loadingSetBefore = true;
+                      // 提取变量名（setLoading -> loading）
+                      if (loadingVarName) {
+                        loadingVarBefore = loadingVarName;
+                      } else {
+                        // 从函数名中提取：setLoading -> loading
+                        loadingVarBefore = funcName.replace(/^set/i, '').toLowerCase();
+                      }
+                      break;
+                    }
+                  }
+                } else if (t.isMemberExpression(callee)) {
+                  // 检查 this.setState({ loading: true }) 模式
+                  const prop = callee.property;
+                  if (t.isIdentifier(prop) && prop.name === 'setState' && args.length > 0) {
+                    const arg = args[0];
+                    if (t.isObjectExpression(arg)) {
+                      for (const prop of arg.properties) {
+                        if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+                          const propName = prop.key.name;
+                          if (propName.toLowerCase().includes('loading') ||
+                              propName.toLowerCase().includes('submitting')) {
+                            const value = prop.value;
+                            if (t.isBooleanLiteral(value) && value.value === true) {
+                              loadingSetBefore = true;
+                              loadingVarBefore = propName;
+                              break;
+                            }
+                          }
+                        }
+                      }
+                      if (loadingSetBefore) break;
+                    }
+                  }
+                }
+              }
             }
             
             // 如果调用前设置了loading为true，检查调用后是否设置为false
@@ -507,6 +567,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                           if (t.isBlockStatement(callbackBody)) {
                             // 检查回调函数体中是否有设置loading为false
                             for (const callbackStmt of callbackBody.body) {
+                              // 检查赋值语句：loading = false
                               if (t.isExpressionStatement(callbackStmt) && 
                                   t.isAssignmentExpression(callbackStmt.expression)) {
                                 const left = callbackStmt.expression.left;
@@ -532,6 +593,105 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                                              t.isBooleanLiteral(right.argument) && right.argument.value === true) {
                                     foundLoadingReset = true;
                                     break;
+                                  }
+                                }
+                              }
+                              
+                              // 检查函数调用：setLoading(false)
+                              if (t.isExpressionStatement(callbackStmt) && 
+                                  t.isCallExpression(callbackStmt.expression)) {
+                                const callee = callbackStmt.expression.callee;
+                                const args = callbackStmt.expression.arguments;
+                                
+                                // 检查 setLoading(false) 模式
+                                if (t.isIdentifier(callee)) {
+                                  const funcName = callee.name;
+                                  const funcNameLower = funcName.toLowerCase();
+                                  // 检查是否是 setLoading, setSubmitting 等函数
+                                  const isSetLoadingFunc = funcNameLower.includes('setloading') || 
+                                                          funcNameLower.includes('setsubmitting') ||
+                                                          (loadingVarBefore && (
+                                                            funcNameLower === 'set' + loadingVarBefore.toLowerCase() ||
+                                                            funcNameLower === 'set' + loadingVarBefore.toLowerCase().charAt(0).toUpperCase() + loadingVarBefore.toLowerCase().slice(1)
+                                                          ));
+                                  
+                                  if (isSetLoadingFunc && args.length > 0) {
+                                    const arg = args[0];
+                                    // 检查参数是否为 false
+                                    if (t.isBooleanLiteral(arg) && arg.value === false) {
+                                      foundLoadingReset = true;
+                                      break;
+                                    }
+                                  }
+                                } else if (t.isMemberExpression(callee)) {
+                                  // 检查 this.setState({ loading: false }) 模式
+                                  const prop = callee.property;
+                                  if (t.isIdentifier(prop) && prop.name === 'setState' && args.length > 0) {
+                                    const arg = args[0];
+                                    if (t.isObjectExpression(arg)) {
+                                      for (const prop of arg.properties) {
+                                        if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+                                          const propName = prop.key.name;
+                                          if (propName === loadingVarBefore || 
+                                              propName.toLowerCase().includes('loading') ||
+                                              propName.toLowerCase().includes('submitting')) {
+                                            const value = prop.value;
+                                            if (t.isBooleanLiteral(value) && value.value === false) {
+                                              foundLoadingReset = true;
+                                              break;
+                                            }
+                                          }
+                                        }
+                                      }
+                                      if (foundLoadingReset) break;
+                                    }
+                                  }
+                                }
+                              }
+                              
+                              // 原有的赋值检查（保留兼容性）
+                              if (t.isExpressionStatement(callbackStmt) && 
+                                  t.isCallExpression(callbackStmt.expression)) {
+                                const callee = callbackStmt.expression.callee;
+                                const args = callbackStmt.expression.arguments;
+                                
+                                // 检查 setLoading(false) 模式
+                                if (t.isIdentifier(callee)) {
+                                  const funcName = callee.name;
+                                  // 检查是否是 setLoading, setSubmitting 等函数
+                                  if ((funcName.toLowerCase().includes('setloading') || 
+                                       funcName.toLowerCase().includes('setsubmitting') ||
+                                       (loadingVarBefore && funcName.toLowerCase() === 'set' + loadingVarBefore.toLowerCase())) &&
+                                      args.length > 0) {
+                                    const arg = args[0];
+                                    // 检查参数是否为 false
+                                    if (t.isBooleanLiteral(arg) && arg.value === false) {
+                                      foundLoadingReset = true;
+                                      break;
+                                    }
+                                  }
+                                } else if (t.isMemberExpression(callee)) {
+                                  // 检查 this.setState({ loading: false }) 模式
+                                  const prop = callee.property;
+                                  if (t.isIdentifier(prop) && prop.name === 'setState' && args.length > 0) {
+                                    const arg = args[0];
+                                    if (t.isObjectExpression(arg)) {
+                                      for (const prop of arg.properties) {
+                                        if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+                                          const propName = prop.key.name;
+                                          if (propName === loadingVarBefore || 
+                                              propName.toLowerCase().includes('loading') ||
+                                              propName.toLowerCase().includes('submitting')) {
+                                            const value = prop.value;
+                                            if (t.isBooleanLiteral(value) && value.value === false) {
+                                              foundLoadingReset = true;
+                                              break;
+                                            }
+                                          }
+                                        }
+                                      }
+                                      if (foundLoadingReset) break;
+                                    }
                                   }
                                 }
                               }
@@ -836,6 +996,9 @@ function checkRule3(filePath, parsed, diff) {
           methodName.toLowerCase().includes('remove') ||
           methodName.toLowerCase().includes('submit') ||
           methodName.toLowerCase().includes('save') ||
+          methodName.toLowerCase().includes('copy') ||
+          methodName.toLowerCase().includes('post') ||
+          methodName.toLowerCase().includes('put') ||
           // 只检查明确的 HTTP 方法名，避免误报（如 output.toString）
           methodName.toLowerCase().match(/\.(post|put)$/) ||
           methodName.toLowerCase().match(/^(post|put)/)

@@ -16,8 +16,18 @@ module.exports = {
       keywords: ['查看', '查看详情', '取消', '返回', '关闭', '详情', 'view', 'cancel', 'close', 'detail']
     },
     // 自定义请求方法名（用于识别接口调用）
+    // 支持多种接口调用方式：
+    // 1. declareRequest + Connect: props.xxxAction()
+    // 2. http.Post/Get: http.Post(), http.Get()
+    // 3. axios: axios.post(), axios.get(), axios({})
+    // 4. XMLHttpRequest: new XMLHttpRequest(), xhr.open(), xhr.send()
+    // 5. props.dispatch: props.dispatch({ type: '...' })
+    // 6. fetchDataApi: fetchDataApi(params)
+    // 7. fetch: fetch()
+    // 8. $http: this.$http.post()
+    // 9. ajax: $.ajax()
     customKeywords: {
-      requestMethods: ['fetch', 'axios', 'request', 'http', 'api']
+      requestMethods: ['fetch', 'axios', 'request', 'http', 'api', 'action', 'dispatch', 'xhr', 'ajax', 'fetchdataapi']
     }
   },
 

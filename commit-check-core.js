@@ -306,9 +306,6 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
 
   let hasApiCall = false;
   let hasProtection = false;
-
-  // 检查是否有接口调用
-  const requestMethods = config.rule1.customKeywords.requestMethods || ['fetch', 'axios', 'request'];
   
   // 检查函数开始处是否有状态锁检查（如 if (isSubmitting) return;）
   const funcBody = path.node.body;
@@ -331,10 +328,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
 
   traverse(path.node, {
     CallExpression(callPath) {
-      const callee = callPath.node.callee;
-      const methodName = getMethodName(callee);
-      
-      if (requestMethods.some(method => methodName.includes(method) || methodName.includes('post') || methodName.includes('put'))) {
+      // 使用新的 isApiCall 函数检测接口调用
+      if (isApiCall(callPath)) {
         hasApiCall = true;
         
         // 检查是否有防重复提交保护
@@ -470,12 +465,8 @@ function checkRule2(filePath, parsed, diff) {
 
     traverse(ast, {
       CallExpression(callPath) {
-        const callee = callPath.node.callee;
-        const methodName = getMethodName(callee);
-        
-        // 检查是否有接口调用
-        const requestMethods = ['fetch', 'axios', 'request', 'get', 'post', 'put', 'delete'];
-        if (requestMethods.some(method => methodName.includes(method))) {
+        // 使用新的 isApiCall 函数检测接口调用
+        if (isApiCall(callPath)) {
           hasApiCall = true;
           
           // 检查是否有 loading
@@ -550,20 +541,62 @@ function checkRule3(filePath, parsed, diff) {
   // 检查是否有 POST/PUT 类型的接口调用
   traverse(ast, {
     CallExpression(callPath) {
+      // 首先检查是否是接口调用
+      if (!isApiCall(callPath)) {
+        return;
+      }
+      
       const callee = callPath.node.callee;
       const methodName = getMethodName(callee);
       
       // 检查是否是 POST/PUT 请求
-      const isPostPut = methodName.includes('post') || methodName.includes('put') || 
-                        methodName.includes('POST') || methodName.includes('PUT') ||
-                        (methodName.includes('request') && callPath.node.arguments.some(arg => {
+      const isPostPut = methodName.toLowerCase().includes('post') || 
+                        methodName.toLowerCase().includes('put') ||
+                        methodName.toLowerCase().includes('delete') ||
+                        // 检查 props.dispatch 中的 type 是否包含操作关键词
+                        (methodName.includes('dispatch') && callPath.node.arguments.some(arg => {
+                          if (t.isObjectExpression(arg)) {
+                            return arg.properties.some(prop => {
+                              if (t.isObjectProperty(prop) && t.isIdentifier(prop.key) && prop.key.name === 'type') {
+                                const value = prop.value;
+                                if (t.isStringLiteral(value)) {
+                                  const typeValue = value.value.toLowerCase();
+                                  // 检查 type 中是否包含操作关键词
+                                  return typeValue.includes('add') || typeValue.includes('create') ||
+                                         typeValue.includes('update') || typeValue.includes('edit') ||
+                                         typeValue.includes('delete') || typeValue.includes('remove') ||
+                                         typeValue.includes('submit') || typeValue.includes('save');
+                                }
+                              }
+                              return false;
+                            });
+                          }
+                          return false;
+                        })) ||
+                        // 检查 Action 方法名是否包含操作关键词
+                        (methodName.endsWith('Action') && (
+                          methodName.toLowerCase().includes('add') ||
+                          methodName.toLowerCase().includes('create') ||
+                          methodName.toLowerCase().includes('update') ||
+                          methodName.toLowerCase().includes('edit') ||
+                          methodName.toLowerCase().includes('delete') ||
+                          methodName.toLowerCase().includes('remove') ||
+                          methodName.toLowerCase().includes('submit') ||
+                          methodName.toLowerCase().includes('save') ||
+                          methodName.toLowerCase().includes('post') ||
+                          methodName.toLowerCase().includes('put')
+                        )) ||
+                        // 检查 axios({ method: 'POST' }) 或 axios({ method: 'PUT' })
+                        (methodName.includes('axios') && callPath.node.arguments.some(arg => {
                           if (t.isObjectExpression(arg)) {
                             return arg.properties.some(prop => {
                               if (t.isObjectProperty(prop) && t.isIdentifier(prop.key) && 
                                   (prop.key.name === 'method' || prop.key.name === 'type')) {
                                 const value = prop.value;
                                 if (t.isStringLiteral(value)) {
-                                  return value.value.toUpperCase() === 'POST' || value.value.toUpperCase() === 'PUT';
+                                  return value.value.toUpperCase() === 'POST' || 
+                                         value.value.toUpperCase() === 'PUT' ||
+                                         value.value.toUpperCase() === 'DELETE';
                                 }
                               }
                               return false;
@@ -748,6 +781,159 @@ function getMethodName(callee) {
     return getMethodName(callee.callee);
   }
   return '';
+}
+
+/**
+ * 检查是否是接口调用
+ * 支持多种接口调用方式：
+ * 1. declareRequest + Connect (通过 props 调用) - props.xxxAction()
+ * 2. http.Post / http.Get - http.Post(), http.Get()
+ * 3. axios - axios.post(), axios.get(), axios({})
+ * 4. XMLHttpRequest - new XMLHttpRequest(), xhr.open(), xhr.send()
+ * 5. props.dispatch - props.dispatch({ type: '...' })
+ * 6. fetchDataApi - fetchDataApi(params)
+ * 7. fetch - fetch()
+ * 8. $http - this.$http.post(), this.$http.get()
+ * 9. ajax - $.ajax(), jQuery.ajax()
+ */
+function isApiCall(callPath) {
+  const callee = callPath.node.callee;
+  const methodName = getMethodName(callee);
+  
+  // 获取配置的请求方法关键词
+  const requestMethods = config.rule1?.customKeywords?.requestMethods || 
+                        config.rule2?.customKeywords?.requestMethods ||
+                        ['fetch', 'axios', 'request', 'http', 'api'];
+  
+  // 1. 检查常见的 HTTP 请求方法
+  const httpMethods = ['post', 'get', 'put', 'delete', 'patch', 'request'];
+  if (httpMethods.some(method => methodName.toLowerCase().includes(method))) {
+    // 检查是否是接口调用（排除非接口调用的方法）
+    const excludePatterns = ['console', 'log', 'warn', 'error', 'debug', 'info'];
+    if (!excludePatterns.some(pattern => methodName.toLowerCase().includes(pattern))) {
+      return true;
+    }
+  }
+  
+  // 2. 检查 props.xxxAction() 模式（dva-runtime declareRequest）
+  if (t.isMemberExpression(callee)) {
+    const object = callee.object;
+    const property = callee.property;
+    
+    // props.xxxAction() 或 this.props.xxxAction()
+    if (t.isIdentifier(object) && object.name === 'props') {
+      if (t.isIdentifier(property) && property.name.endsWith('Action')) {
+        return true;
+      }
+    }
+    
+    // this.props.xxxAction()
+    if (t.isMemberExpression(object)) {
+      // object 应该是 this.props，检查 object.object 是否是 this
+      const isThisProps = (t.isThisExpression(object.object) || 
+                          (t.isIdentifier(object.object) && object.object.name === 'this')) &&
+                          t.isIdentifier(object.property) && 
+                          object.property.name === 'props';
+      if (isThisProps && t.isIdentifier(property) && property.name.endsWith('Action')) {
+        return true;
+      }
+    }
+    
+    // http.Post(), http.Get() 等
+    if (t.isIdentifier(object) && object.name === 'http') {
+      if (t.isIdentifier(property) && ['Post', 'Get', 'Put', 'Delete', 'Patch'].includes(property.name)) {
+        return true;
+      }
+    }
+    
+    // this.$http.post(), this.$http.get() 等
+    if (t.isMemberExpression(object) && 
+        t.isIdentifier(object.property) && object.property.name === '$http') {
+      if (t.isIdentifier(property) && httpMethods.includes(property.name.toLowerCase())) {
+        return true;
+      }
+    }
+    
+    // $.ajax(), jQuery.ajax()
+    if ((t.isIdentifier(object) && object.name === '$') || 
+        (t.isIdentifier(object) && object.name === 'jQuery')) {
+      if (t.isIdentifier(property) && property.name === 'ajax') {
+        return true;
+      }
+    }
+  }
+  
+  // 3. 检查 axios({}) 或 axios.post() 等
+  if (t.isIdentifier(callee) && callee.name === 'axios') {
+    return true;
+  }
+  
+  // 4. 检查 fetch()
+  if (t.isIdentifier(callee) && callee.name === 'fetch') {
+    return true;
+  }
+  
+  // 5. 检查 fetchDataApi()
+  if (t.isIdentifier(callee) && callee.name === 'fetchDataApi') {
+    return true;
+  }
+  
+  // 6. 检查 props.dispatch()
+  if (t.isMemberExpression(callee)) {
+    const object = callee.object;
+    const property = callee.property;
+    
+    if (t.isIdentifier(object) && object.name === 'props' && 
+        t.isIdentifier(property) && property.name === 'dispatch') {
+      // 检查 dispatch 的参数是否是对象，且包含 type 字段
+      const args = callPath.node.arguments;
+      if (args.length > 0 && t.isObjectExpression(args[0])) {
+        const props = args[0].properties;
+        const hasType = props.some(prop => 
+          t.isObjectProperty(prop) && 
+          t.isIdentifier(prop.key) && 
+          prop.key.name === 'type'
+        );
+        if (hasType) {
+          return true;
+        }
+      }
+    }
+  }
+  
+  // 7. 检查 XMLHttpRequest 相关调用
+  if (t.isNewExpression(callee) && 
+      t.isIdentifier(callee.callee) && 
+      callee.callee.name === 'XMLHttpRequest') {
+    return true;
+  }
+  
+  // 检查 xhr.open(), xhr.send() 等方法调用
+  if (t.isMemberExpression(callee)) {
+    const property = callee.property;
+    if (t.isIdentifier(property) && ['open', 'send', 'setRequestHeader'].includes(property.name)) {
+      // 检查对象是否是 xhr 或 XMLHttpRequest 实例
+      const object = callee.object;
+      if (t.isIdentifier(object)) {
+        // 简单检查：如果变量名包含 xhr 或 http，认为是 XMLHttpRequest
+        if (object.name.toLowerCase().includes('xhr') || 
+            object.name.toLowerCase().includes('http')) {
+          return true;
+        }
+      }
+    }
+  }
+  
+  // 8. 检查配置中的自定义请求方法关键词
+  if (requestMethods.some(method => methodName.toLowerCase().includes(method.toLowerCase()))) {
+    // 排除非接口调用的方法
+    const excludePatterns = ['console', 'log', 'warn', 'error', 'debug', 'info', 'parse', 'stringify'];
+    if (!excludePatterns.some(pattern => methodName.toLowerCase().includes(pattern))) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 /**

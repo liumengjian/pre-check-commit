@@ -159,58 +159,16 @@ function parseHTMLFile(content) {
 }
 
 /**
- * 移除注释内容
- */
-function removeComments(text) {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
-    .replace(/\/\/.*$/gm, ''); // 移除 // 注释
-}
-
-/**
- * 检查是否是新增文件
- */
-function isNewFile(diff) {
-  return !diff || !diff.includes('---') || (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
-}
-
-/**
- * 检查 diff 中是否包含新增的组件
- */
-function isNewlyAddedInDiff(diff, componentName, isNewFile) {
-  if (isNewFile) return true;
-  if (!diff) return false;
-  
-  const diffLines = diff.split('\n');
-  for (let i = 0; i < diffLines.length; i++) {
-    const line = diffLines[i];
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      if (line.includes(componentName) && line.includes('<')) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * 转义正则表达式特殊字符
- */
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
  * 检查规则1：新增按钮接口调用防重复提交检查
  */
 function checkRule1(filePath, parsed, diff) {
   if (!config.rule1.enabled) return null;
 
   const errors = [];
-  const { ast, template = '', content } = parsed;
+  const { type, ast, template = '', content } = parsed;
 
   // 检查是否在 diff 中新增了按钮，或者检查所有按钮（如果文件是新增的）
-  const fileIsNew = isNewFile(diff);
+  const isNewFile = !diff || !diff.includes('---') || (diff && diff.split('\n').filter(l => l.startsWith('+++')).length > 0);
   const hasNewButton = diff && diff.includes('+') && (
     diff.includes('button') || 
     diff.includes('Button') || 
@@ -227,7 +185,7 @@ function checkRule1(filePath, parsed, diff) {
   );
 
   // 如果既不是新文件，也没有新增按钮，则跳过检查
-  if (!fileIsNew && !hasNewButton) {
+  if (!isNewFile && !hasNewButton) {
     return null;
   }
 
@@ -246,10 +204,18 @@ function checkRule1(filePath, parsed, diff) {
   ];
 
   const handlers = new Set();
+  
+  // 移除注释，避免匹配到注释中的代码
+  const removeComments = (text) => {
+    return text
+      .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
+      .replace(/\/\/.*$/gm, ''); // 移除 // 注释
+  };
+  
   const contentWithoutComments = removeComments(content);
 
   // 如果是新文件，检查整个文件内容（跳过注释）
-  if (fileIsNew) {
+  if (isNewFile) {
     // 直接在原始内容中匹配，但检查是否在注释中
     for (const pattern of buttonPatterns) {
       pattern.lastIndex = 0;
@@ -867,14 +833,16 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
     const fullContent = parsed.content || '';
     
     // 移除注释后检查
-    const contentWithoutComments = removeComments(fullContent);
+    const contentWithoutComments = fullContent
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
     
     // 检查 Modal/Drawer/Form 是否有 onOk/onFinish 但没有 loading
     // 这里先不检查具体的 loading 名称，只检查是否有这些组件但没有 loading
     const modalMatch = contentWithoutComments.match(new RegExp(`<Modal[\\s\\S]*?</Modal>`, 'i'));
     if (modalMatch) {
       const modalContent = modalMatch[0];
-      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapeRegExp(handlerName)}`, 'i').test(modalContent);
+      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(modalContent);
       if (hasOnOk && !new RegExp(`confirmLoading=\\{[^}]+\\}`, 'i').test(modalContent)) {
         foundModalOrDrawerWithoutLoading = true;
       }
@@ -883,7 +851,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
     const drawerMatch = contentWithoutComments.match(new RegExp(`<Drawer[\\s\\S]*?</Drawer>`, 'i'));
     if (drawerMatch) {
       const drawerContent = drawerMatch[0];
-      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${escapeRegExp(handlerName)}`, 'i').test(drawerContent);
+      const hasOnOk = new RegExp(`onOk[\\s\\S]*?${handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(drawerContent);
       if (hasOnOk && !new RegExp(`confirmLoading=\\{[^}]+\\}`, 'i').test(drawerContent)) {
         foundModalOrDrawerWithoutLoading = true;
       }
@@ -892,7 +860,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
     const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
     if (formMatch) {
       const formContent = formMatch[0];
-      const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapeRegExp(handlerName)}`, 'i').test(formContent);
+      const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(formContent);
       if (hasOnFinish) {
         // Form 的 loading 可能在 Form 组件上，也可能在提交按钮上
         const hasFormLoading = new RegExp(`loading=\\{[^}]+\\}`, 'i').test(formContent);
@@ -929,12 +897,16 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
               const fullContent = parsed.content || '';
               
               // 移除注释后检查
-              const contentWithoutComments = removeComments(fullContent);
-              const templateWithoutComments = removeComments(templateContent);
+              const contentWithoutComments = fullContent
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .replace(/\/\/.*$/gm, '');
+              const templateWithoutComments = templateContent
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .replace(/\/\/.*$/gm, '');
               
               // 转义特殊字符
-              const escapedLoadingName = escapeRegExp(declareRequestInfo.loadingName);
-              const escapedHandlerName = escapeRegExp(handlerName);
+              const escapedLoadingName = declareRequestInfo.loadingName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const escapedHandlerName = handlerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               
               // 先检查 Modal/Drawer/Popconfirm，如果它们有 onOk/onConfirm 但没有 loading，则没有保护
               // 检查 Modal 是否绑定了 confirmLoading（支持多行，不关心顺序）
@@ -1065,17 +1037,19 @@ function checkRule2(filePath, parsed, diff) {
   if (!config.rule2.enabled) return null;
 
   const errors = [];
-  const { ast, template = '', content } = parsed;
+  const { type, ast, template = '', content } = parsed;
 
   // 检查是否是新增文件或新增了初始化逻辑
-  const fileIsNew = isNewFile(diff);
+  // 新增文件的判断：diff 以 +++ 开头，或者没有 --- 行
+  const isNewFile = !diff || (!diff.includes('---') && diff.includes('+++')) ||
+    (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
   const hasInitLogic = diff && (diff.includes('created') || diff.includes('mounted') ||
     diff.includes('useEffect') || diff.includes('componentDidMount'));
 
   // 检查是否有useEffect（即使不是新增文件，只要有useEffect也检查）
   const hasUseEffectInContent = content.includes('useEffect');
 
-  if (!fileIsNew && !hasInitLogic && !hasUseEffectInContent) {
+  if (!isNewFile && !hasInitLogic && !hasUseEffectInContent) {
     return null;
   }
 
@@ -1250,7 +1224,7 @@ function checkRule3(filePath, parsed, diff) {
   if (!config.rule3.enabled) return null;
 
   const errors = [];
-  const { ast, content } = parsed;
+  const { type, ast, content } = parsed;
 
   if (!ast) return null;
 
@@ -1458,7 +1432,7 @@ function checkRule4(filePath, parsed, diff) {
   if (!config.rule4.enabled) return null;
 
   const errors = [];
-  const { ast, template = '', content } = parsed;
+  const { type, ast, template = '', content } = parsed;
 
   // 检查是否使用了 Table 组件
   const hasTableComponent = (template && (template.includes('el-table') || template.includes('<Table'))) ||
@@ -1513,10 +1487,10 @@ function checkRule5(filePath, parsed, diff) {
   if (!config.rule5 || !config.rule5.enabled) return null;
 
   const errors = [];
-  const { ast, template = '', content } = parsed;
+  const { type, ast, template = '', content } = parsed;
 
   // 检查是否是新增文件或新增了表单输入组件
-  const fileIsNew = isNewFile(diff);
+  const isNewFile = !diff || !diff.includes('---') || (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
   const hasNewInput = diff && (
     diff.includes('<Input') || diff.includes('<input') || diff.includes('<Select') ||
     diff.includes('<select') || diff.includes('<DatePicker') || diff.includes('<TimePicker') ||
@@ -1526,7 +1500,7 @@ function checkRule5(filePath, parsed, diff) {
   );
 
   // 如果既不是新文件，也没有新增输入组件，则跳过检查
-  if (!fileIsNew && !hasNewInput) {
+  if (!isNewFile && !hasNewInput) {
     return null;
   }
 
@@ -1610,7 +1584,22 @@ function checkRule5(filePath, parsed, diff) {
         if (!hasPlaceholder) {
           const line = path.node.loc?.start.line || 0;
           
-          if (isNewlyAddedInDiff(diff, componentName, fileIsNew)) {
+          // 检查是否是新增的（通过检查 diff）
+          let isNewlyAdded = isNewFile;
+          if (!isNewFile && diff) {
+            const diffLines = diff.split('\n');
+            for (let i = 0; i < diffLines.length; i++) {
+              const line = diffLines[i];
+              if (line.startsWith('+') && !line.startsWith('+++')) {
+                if (line.includes(componentName) && line.includes('<')) {
+                  isNewlyAdded = true;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (isNewlyAdded) {
             errors.push({
               rule: 5,
               file: filePath,
@@ -1629,7 +1618,9 @@ function checkRule5(filePath, parsed, diff) {
     const combinedContent = fullContent + '\n' + templateContent;
 
     // 移除注释内容，避免匹配到注释中的代码
-    const contentWithoutComments = removeComments(combinedContent);
+    const contentWithoutComments = combinedContent
+      .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
+      .replace(/\/\/.*$/gm, ''); // 移除 // 注释
 
     // 检查每个输入组件
     for (const componentName of inputComponents) {
@@ -1675,8 +1666,24 @@ function checkRule5(filePath, parsed, diff) {
           const beforeMatch = contentWithoutComments.substring(0, matchIndex);
           const lineNum = beforeMatch.split('\n').length;
 
+          // 检查是否是新增的（在 diff 中）
+          let isNewlyAdded = isNewFile;
+          if (!isNewFile && diff) {
+            // 检查 diff 中是否包含这个组件
+            const diffLines = diff.split('\n');
+            for (let i = 0; i < diffLines.length; i++) {
+              const line = diffLines[i];
+              if (line.startsWith('+') && !line.startsWith('+++')) {
+                if (line.includes(componentName) && (line.includes('<') || line.includes('<'))) {
+                  isNewlyAdded = true;
+                  break;
+                }
+              }
+            }
+          }
+
           // 只检查新增的组件
-          if (isNewlyAddedInDiff(diff, componentName, fileIsNew)) {
+          if (isNewlyAdded) {
             errors.push({
               rule: 5,
               file: filePath,
@@ -2051,7 +2058,7 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '', re
   const fullContent = (content || '') + '\n' + (template || '');
   
   // 转义特殊字符
-  const escapedLoadingName = escapeRegExp(loadingName);
+  const escapedLoadingName = loadingName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   
   // 检查解构赋值：const { pageLoading } = props.global; 或 const { pageLoading, other } = props.global;
   const destructurePatterns = [
@@ -2075,7 +2082,10 @@ function checkDeclareRequestLoadingUsage(loadingName, content, template = '', re
     }
     
     // 检查是否在 JSX 中实际使用（排除注释）
-    const contentWithoutComments = removeComments(fullContent);
+    // 移除注释内容，避免匹配到注释中的代码
+    const contentWithoutComments = fullContent
+      .replace(/\/\*[\s\S]*?\*\//g, '') // 移除 /* */ 注释
+      .replace(/\/\/.*$/gm, ''); // 移除 // 注释
     
     // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
     const templatePatterns = [

@@ -1333,7 +1333,7 @@ function resolveNamespaceFile(importPath, currentFilePath) {
 
 /**
  * 从 namespace 文件中查找所有 namespace 的值
- * namespace 文件通常包含类似：export const NS_COURSELIBRARY = 'courseLibrary';
+ * namespace 文件通常包含类似：export const NS_COURSELIBRARY = defineNamespace('courseLibrary');
  * 返回：{ NS_COURSELIBRARY: 'courseLibrary', NS_GLOBAL: 'global' }
  */
 function parseNamespaceValues(namespaceFile) {
@@ -1351,8 +1351,19 @@ function parseNamespaceValues(namespaceFile) {
     traverse(ast, {
       VariableDeclarator(path) {
         if (t.isIdentifier(path.node.id) && path.node.id.name.startsWith('NS_')) {
+          // 处理字符串字面量：export const NS_COURSELIBRARY = 'courseLibrary';
           if (t.isStringLiteral(path.node.init)) {
             namespaceValues[path.node.id.name] = path.node.init.value;
+          }
+          // 处理 defineNamespace 调用：export const NS_COURSELIBRARY = defineNamespace('courseLibrary');
+          else if (t.isCallExpression(path.node.init)) {
+            const callee = path.node.init.callee;
+            if (t.isIdentifier(callee) && callee.name === 'defineNamespace') {
+              const args = path.node.init.arguments;
+              if (args.length > 0 && t.isStringLiteral(args[0])) {
+                namespaceValues[path.node.id.name] = args[0].value;
+              }
+            }
           }
         }
       }
@@ -1400,8 +1411,11 @@ function getActionFilesFromNamespaceValues(namespaceValues) {
 
 /**
  * 从文件中查找 declareRequest 定义并提取 loading 名称
- * 例如：export const GetLabelTypePullDownAction = declareRequest('pageLoading', ...)
- * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'pageLoading' }
+ * 例如：export const GetLabelTypePullDownAction = declareRequest('loading', ...)
+ * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'loading' }
+ * 
+ * 注意：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
+ * 如果第一个参数是其他值（如 'pageLoading'），则返回 null
  */
 function findDeclareRequestLoading(actionName, filePath, ast) {
   if (!actionName) return null;
@@ -1480,8 +1494,9 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
                   const args = path.node.init.arguments;
                   if (args.length > 0 && t.isStringLiteral(args[0])) {
                     const loadingName = args[0].value;
-                    // 检查第一个参数是否包含 loading（如 'pageLoading'）
-                    if (loadingName.toLowerCase().includes('loading')) {
+                    // 关键修改：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
+                    // 如果第一个参数是其他值（如 'pageLoading'），则不能通过这种方式获取接口的 loading 状态
+                    if (loadingName === 'loading') {
                       found = {
                         actionName: actionName,
                         loadingName: loadingName
@@ -1503,7 +1518,8 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
                     const args = path.node.right.arguments;
                     if (args.length > 0 && t.isStringLiteral(args[0])) {
                       const loadingName = args[0].value;
-                      if (loadingName.toLowerCase().includes('loading')) {
+                      // 关键修改：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
+                      if (loadingName === 'loading') {
                         found = {
                           actionName: actionName,
                           loadingName: loadingName

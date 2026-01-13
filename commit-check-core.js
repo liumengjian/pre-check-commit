@@ -760,7 +760,13 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
         if (isApiCall(apiCallPath)) {
           const actionName = getActionNameFromCall(apiCallPath);
           if (actionName) {
-            const declareRequestInfo = findDeclareRequestLoading(actionName, filePath, parsed.ast);
+            // 首先尝试查找第一个参数为 'loading' 的接口
+            let declareRequestInfo = findDeclareRequestLoading(actionName, filePath, parsed.ast);
+            // 如果没找到，查找接口定义（无论第一个参数是什么）
+            if (!declareRequestInfo) {
+              declareRequestInfo = findDeclareRequestInfo(actionName, filePath, parsed.ast);
+            }
+            
             if (declareRequestInfo && declareRequestInfo.loadingName) {
               // 检查页面中是否使用了这个 loading（在按钮上绑定）
               const handlerName = handler.name.replace(/['"()]/g, '').trim();
@@ -938,11 +944,21 @@ function checkRule2(filePath, parsed, diff) {
           if (!hasLoading) {
             const actionName = getActionNameFromCall(callPath);
             if (actionName) {
+              // 首先尝试查找第一个参数为 'loading' 的接口
               const declareRequestInfo = findDeclareRequestLoading(actionName, filePath, ast);
               if (declareRequestInfo && declareRequestInfo.loadingName) {
                 // 检查页面中是否使用了这个 loading
                 if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, template)) {
                   hasLoading = true;
+                }
+              } else {
+                // 如果第一个参数不是 'loading'，查找接口定义（无论第一个参数是什么）
+                const declareRequestInfoAny = findDeclareRequestInfo(actionName, filePath, ast);
+                if (declareRequestInfoAny && declareRequestInfoAny.loadingName) {
+                  // 检查页面中是否使用了这个 loading（即使第一个参数不是 'loading'）
+                  if (checkDeclareRequestLoadingUsage(declareRequestInfoAny.loadingName, content, template)) {
+                    hasLoading = true;
+                  }
                 }
               }
             }
@@ -1410,14 +1426,11 @@ function getActionFilesFromNamespaceValues(namespaceValues) {
 }
 
 /**
- * 从文件中查找 declareRequest 定义并提取 loading 名称
- * 例如：export const GetLabelTypePullDownAction = declareRequest('loading', ...)
- * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'loading' }
- * 
- * 注意：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
- * 如果第一个参数是其他值（如 'pageLoading'），则返回 null
+ * 从文件中查找 declareRequest 定义并提取 loading 名称（无论第一个参数是什么）
+ * 例如：export const GetLabelTypePullDownAction = declareRequest('pageLoading', ...)
+ * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'pageLoading' }
  */
-function findDeclareRequestLoading(actionName, filePath, ast) {
+function findDeclareRequestInfo(actionName, filePath, ast) {
   if (!actionName) return null;
   
   try {
@@ -1494,15 +1507,12 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
                   const args = path.node.init.arguments;
                   if (args.length > 0 && t.isStringLiteral(args[0])) {
                     const loadingName = args[0].value;
-                    // 关键修改：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
-                    // 如果第一个参数是其他值（如 'pageLoading'），则不能通过这种方式获取接口的 loading 状态
-                    if (loadingName === 'loading') {
-                      found = {
-                        actionName: actionName,
-                        loadingName: loadingName
-                      };
-                      path.stop();
-                    }
+                    // 返回所有找到的接口定义（无论第一个参数是什么）
+                    found = {
+                      actionName: actionName,
+                      loadingName: loadingName
+                    };
+                    path.stop();
                   }
                 }
               }
@@ -1518,14 +1528,12 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
                     const args = path.node.right.arguments;
                     if (args.length > 0 && t.isStringLiteral(args[0])) {
                       const loadingName = args[0].value;
-                      // 关键修改：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
-                      if (loadingName === 'loading') {
-                        found = {
-                          actionName: actionName,
-                          loadingName: loadingName
-                        };
-                        path.stop();
-                      }
+                      // 返回所有找到的接口定义（无论第一个参数是什么）
+                      found = {
+                        actionName: actionName,
+                        loadingName: loadingName
+                      };
+                      path.stop();
                     }
                   }
                 }
@@ -1544,6 +1552,26 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
     }
   } catch (e) {
     // 查找失败，返回 null
+  }
+  
+  return null;
+}
+
+/**
+ * 从文件中查找 declareRequest 定义并提取 loading 名称
+ * 例如：export const GetLabelTypePullDownAction = declareRequest('loading', ...)
+ * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'loading' }
+ * 
+ * 注意：只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
+ * 如果第一个参数是其他值（如 'pageLoading'），则返回 null
+ */
+function findDeclareRequestLoading(actionName, filePath, ast) {
+  // 调用 findDeclareRequestInfo 查找接口定义
+  const info = findDeclareRequestInfo(actionName, filePath, ast);
+  
+  // 只有当第一个参数严格等于 'loading' 时，才返回 loading 信息
+  if (info && info.loadingName === 'loading') {
+    return info;
   }
   
   return null;

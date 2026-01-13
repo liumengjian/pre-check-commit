@@ -165,33 +165,16 @@ function checkRule1(filePath, parsed, diff) {
   const errors = [];
   const { type, ast, template = '', content } = parsed;
 
-  // 检查是否在 diff 中新增了按钮
-  if (!diff || !diff.includes('+') || (!diff.includes('button') && !diff.includes('Button') && !diff.includes('@click') && !diff.includes('onClick'))) {
+  // 检查是否在 diff 中新增了按钮，或者检查所有按钮（如果文件是新增的）
+  const isNewFile = !diff || !diff.includes('---') || (diff && diff.split('\n').filter(l => l.startsWith('+++')).length > 0);
+  const hasNewButton = diff && diff.includes('+') && (diff.includes('button') || diff.includes('Button') || diff.includes('@click') || diff.includes('onClick'));
+  
+  // 如果既不是新文件，也没有新增按钮，则跳过检查
+  if (!isNewFile && !hasNewButton) {
     return null;
   }
 
-  // 提取新增的按钮和点击事件
-  // 首先从 diff 中提取新增的行
-  const diffLines = diff.split('\n');
-  const addedLines = [];
-  let currentLineOffset = 0;
-  
-  for (let i = 0; i < diffLines.length; i++) {
-    const line = diffLines[i];
-    if (line.startsWith('@@')) {
-      // 解析行号信息
-      const match = line.match(/@@ -\d+,\d+ \+(\d+),\d+ @@/);
-      if (match) {
-        currentLineOffset = parseInt(match[1]) - 1;
-      }
-    } else if (line.startsWith('+') && !line.startsWith('+++')) {
-      addedLines.push({ line: currentLineOffset, content: line.substring(1) });
-      currentLineOffset++;
-    } else if (!line.startsWith('-') && !line.startsWith('@@') && !line.startsWith('\\')) {
-      currentLineOffset++;
-    }
-  }
-
+  // 提取按钮和点击事件
   const buttonPatterns = [
     /<button[^>]*onclick=["']([^"']+)["'][^>]*>/gi,
     /<button[^>]*@click=["']([^"']+)["'][^>]*>/gi,
@@ -201,20 +184,8 @@ function checkRule1(filePath, parsed, diff) {
 
   const handlers = new Set();
   
-  // 检查新增的行中是否包含按钮
-  for (const addedLine of addedLines) {
-    for (const pattern of buttonPatterns) {
-      pattern.lastIndex = 0; // 重置正则
-      const match = pattern.exec(addedLine.content);
-      if (match) {
-        const handlerName = match[1].trim().replace(/['"]/g, '').replace(/\(\)/g, '');
-        handlers.add({ name: handlerName, line: addedLine.line });
-      }
-    }
-  }
-  
-  // 如果没找到，也检查整个文件内容（兼容性处理）
-  if (handlers.size === 0) {
+  // 如果是新文件，检查整个文件内容
+  if (isNewFile) {
     for (const pattern of buttonPatterns) {
       pattern.lastIndex = 0;
       let match;
@@ -222,6 +193,39 @@ function checkRule1(filePath, parsed, diff) {
         const handlerName = match[1].trim().replace(/['"]/g, '').replace(/\(\)/g, '');
         const lineNum = content.substring(0, match.index).split('\n').length;
         handlers.add({ name: handlerName, line: lineNum });
+      }
+    }
+  } else if (hasNewButton && diff) {
+    // 如果只是新增了按钮，从 diff 中提取新增的行
+    const diffLines = diff.split('\n');
+    const addedLines = [];
+    let currentLineOffset = 0;
+    
+    for (let i = 0; i < diffLines.length; i++) {
+      const line = diffLines[i];
+      if (line.startsWith('@@')) {
+        // 解析行号信息
+        const match = line.match(/@@ -\d+,\d+ \+(\d+),\d+ @@/);
+        if (match) {
+          currentLineOffset = parseInt(match[1]) - 1;
+        }
+      } else if (line.startsWith('+') && !line.startsWith('+++')) {
+        addedLines.push({ line: currentLineOffset, content: line.substring(1) });
+        currentLineOffset++;
+      } else if (!line.startsWith('-') && !line.startsWith('@@') && !line.startsWith('\\')) {
+        currentLineOffset++;
+      }
+    }
+    
+    // 检查新增的行中是否包含按钮
+    for (const addedLine of addedLines) {
+      for (const pattern of buttonPatterns) {
+        pattern.lastIndex = 0; // 重置正则
+        const match = pattern.exec(addedLine.content);
+        if (match) {
+          const handlerName = match[1].trim().replace(/['"]/g, '').replace(/\(\)/g, '');
+          handlers.add({ name: handlerName, line: addedLine.line });
+        }
       }
     }
   }
@@ -246,7 +250,7 @@ function checkRule1(filePath, parsed, diff) {
       },
       FunctionExpression(path) {
         const parent = path.parent;
-        if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
+        if (parent && t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           const funcName = parent.id.name;
           handlers.forEach(handler => {
             const handlerName = handler.name.replace(/['"()]/g, '').trim();
@@ -260,7 +264,7 @@ function checkRule1(filePath, parsed, diff) {
       },
       ArrowFunctionExpression(path) {
         const parent = path.parent;
-        if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
+        if (parent && t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           const funcName = parent.id.name;
           handlers.forEach(handler => {
             const handlerName = handler.name.replace(/['"()]/g, '').trim();
@@ -326,7 +330,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
     }
   }
 
-  traverse(path.node, {
+  // 使用 path.traverse 而不是独立的 traverse，这样可以正确传递 scope 和 parentPath
+  path.traverse({
     CallExpression(callPath) {
       // 使用新的 isApiCall 函数检测接口调用
       if (isApiCall(callPath)) {
@@ -338,13 +343,14 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
         
         // 检查防抖/节流
         let currentPath = callPath;
-        while (currentPath.parent) {
-          if (t.isCallExpression(currentPath.parent)) {
-            const parentCallee = getMethodName(currentPath.parent.node.callee);
+        while (currentPath && currentPath.parentPath) {
+          const parentNode = currentPath.parentPath.node;
+          if (parentNode && t.isCallExpression(parentNode)) {
+            const parentCallee = getMethodName(parentNode.callee);
             if (parentCallee.includes('debounce') || parentCallee.includes('throttle')) {
               // 检查延迟时间
-              const args = currentPath.parent.node.arguments;
-              if (args.length >= 2) {
+              const args = parentNode.arguments;
+              if (args && args.length >= 2) {
                 const delay = args[1];
                 if (t.isNumericLiteral(delay) && delay.value >= 500) {
                   hasProtection = true;
@@ -362,6 +368,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
             }
           }
           currentPath = currentPath.parentPath;
+          if (!currentPath) break;
         }
         
         // 检查状态锁（在接口调用前后）
@@ -435,21 +442,30 @@ function checkRule2(filePath, parsed, diff) {
   const { type, ast, template = '', content } = parsed;
 
   // 检查是否是新增文件或新增了初始化逻辑
-  const isNewFile = !diff || !diff.includes('---') || diff.match(/^\+/m);
+  // 新增文件的判断：diff 以 +++ 开头，或者没有 --- 行
+  const isNewFile = !diff || (!diff.includes('---') && diff.includes('+++')) || 
+                     (diff && diff.split('\n').some(line => line.startsWith('+++') && !line.includes('---')));
   const hasInitLogic = diff && (diff.includes('created') || diff.includes('mounted') || 
                        diff.includes('useEffect') || diff.includes('componentDidMount'));
+  
+  // 检查是否有useEffect（即使不是新增文件，只要有useEffect也检查）
+  const hasUseEffectInContent = content.includes('useEffect');
 
-  if (!isNewFile && !hasInitLogic) {
+  if (!isNewFile && !hasInitLogic && !hasUseEffectInContent) {
     return null;
   }
 
-  // 检查是否是列表页或详情页
+  // 检查是否是列表页或详情页（可选，如果不是列表页/详情页，只要有useEffect中的接口调用也检查）
   const isListPage = (template && (template.includes('el-table') || template.includes('<Table'))) || 
                      content.includes('.map(') || content.includes('v-for');
   const isDetailPage = content.includes('getDetail') || content.includes('fetchDetail') || 
                        content.includes('queryDetail') || content.includes('详情');
-
-  if (!isListPage && !isDetailPage) {
+  
+  // 检查是否有useEffect
+  const hasUseEffect = content.includes('useEffect');
+  
+  // 如果不是列表页/详情页，也没有useEffect，则跳过检查
+  if (!isListPage && !isDetailPage && !hasUseEffect) {
     return null;
   }
 
@@ -460,60 +476,106 @@ function checkRule2(filePath, parsed, diff) {
   }
 
   if (ast) {
-    let hasApiCall = false;
+    let hasApiCallInEffect = false;
     let hasLoading = false;
+    const loadingMethods = config.rule2.customKeywords.loadingMethods || 
+                          ['showLoading', 'hideLoading', 'loading', 'setLoading'];
 
+    // 检查 useEffect 中的接口调用
+    // 先找到所有接口调用，然后检查它们是否在 useEffect 中
     traverse(ast, {
       CallExpression(callPath) {
-        // 使用新的 isApiCall 函数检测接口调用
-        if (isApiCall(callPath)) {
-          hasApiCall = true;
+        // 检查是否是接口调用
+        if (!isApiCall(callPath)) {
+          return;
+        }
+        
+        // 检查是否在 useEffect 的回调函数中
+        let currentPath = callPath;
+        let inUseEffect = false;
+        let parentFunc = null;
+        
+        // 向上查找，看是否在 useEffect 的回调中
+        while (currentPath && currentPath.parentPath) {
+          // 检查是否是函数表达式或箭头函数
+          if (currentPath.parentPath.isArrowFunctionExpression() || 
+              currentPath.parentPath.isFunctionExpression()) {
+            parentFunc = currentPath.parentPath;
+            // 继续向上查找，看是否是 useEffect 的回调
+            let checkPath = currentPath.parentPath.parentPath;
+            while (checkPath) {
+              if (checkPath.isCallExpression() && 
+                  t.isIdentifier(checkPath.node.callee) && 
+                  checkPath.node.callee.name === 'useEffect') {
+                inUseEffect = true;
+                break;
+              }
+              checkPath = checkPath.parentPath;
+            }
+            break;
+          }
+          currentPath = currentPath.parentPath;
+        }
+        
+        if (inUseEffect && parentFunc) {
+          hasApiCallInEffect = true;
           
           // 检查是否有 loading
-          const loadingMethods = config.rule2.customKeywords.loadingMethods || 
-                                ['showLoading', 'hideLoading', 'loading', 'setLoading'];
-          
-          // 检查父级作用域
-          const parentFunc = callPath.findParent(p => p.isFunction());
-          if (parentFunc) {
-            const funcBody = parentFunc.node.body;
-            if (t.isBlockStatement(funcBody)) {
-              const statements = funcBody.body;
-              const callIndex = statements.findIndex(s => 
-                s === callPath.node || (t.isExpressionStatement(s) && s.expression === callPath.node)
-              );
-              
-              // 检查调用前是否有 showLoading
-              for (let i = 0; i < callIndex; i++) {
-                const stmt = statements[i];
-                if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
-                  const stmtMethod = getMethodName(stmt.expression.callee);
-                  if (loadingMethods.some(m => stmtMethod.includes(m))) {
-                    hasLoading = true;
-                    break;
+          const funcBody = parentFunc.node.body;
+          if (t.isBlockStatement(funcBody)) {
+            const statements = funcBody.body;
+            
+            // 检查调用前是否有 showLoading
+            for (const stmt of statements) {
+              if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
+                const stmtMethod = getMethodName(stmt.expression.callee);
+                if (loadingMethods.some(m => stmtMethod.includes(m))) {
+                  hasLoading = true;
+                  break;
+                }
+              }
+            }
+            
+            // 检查接口调用是否在 Promise 链中
+            currentPath = callPath;
+            while (currentPath && currentPath.parentPath) {
+              if (currentPath.parentPath.isMemberExpression()) {
+                const prop = currentPath.parentPath.node.property;
+                if (t.isIdentifier(prop) && (prop.name === 'then' || prop.name === 'catch' || prop.name === 'finally')) {
+                  const thenCall = currentPath.parentPath.parentPath;
+                  if (thenCall && thenCall.isCallExpression() && thenCall.node.arguments.length > 0) {
+                    const callback = thenCall.node.arguments[0];
+                    if (callback && (t.isArrowFunctionExpression(callback) || t.isFunctionExpression(callback))) {
+                      const callbackBody = callback.body;
+                      if (t.isBlockStatement(callbackBody)) {
+                        for (const stmt of callbackBody.body) {
+                          if (t.isExpressionStatement(stmt) && t.isCallExpression(stmt.expression)) {
+                            const stmtMethod = getMethodName(stmt.expression.callee);
+                            if (loadingMethods.some(m => stmtMethod.includes(m))) {
+                              hasLoading = true;
+                              break;
+                            }
+                          }
+                        }
+                      } else if (t.isCallExpression(callbackBody)) {
+                        const stmtMethod = getMethodName(callbackBody.callee);
+                        if (loadingMethods.some(m => stmtMethod.includes(m))) {
+                          hasLoading = true;
+                        }
+                      }
+                    }
                   }
                 }
               }
-              
-              // 检查调用后是否有 hideLoading（在 then/catch 中）
-              if (t.isCallExpression(callPath.node) && 
-                  (t.isMemberExpression(callPath.parent) || t.isVariableDeclarator(callPath.parent))) {
-                // 检查是否有 .then() 或 .catch()
-                const memberExpr = callPath.findParent(p => p.isMemberExpression());
-                if (memberExpr) {
-                  const prop = memberExpr.node.property;
-                  if (t.isIdentifier(prop) && (prop.name === 'then' || prop.name === 'catch')) {
-                    hasLoading = true;
-                  }
-                }
-              }
+              currentPath = currentPath.parentPath;
+              if (hasLoading) break;
             }
           }
         }
       }
     });
 
-    if (hasApiCall && !hasLoading) {
+    if (hasApiCallInEffect && !hasLoading) {
       errors.push({
         rule: 2,
         file: filePath,
@@ -553,6 +615,12 @@ function checkRule3(filePath, parsed, diff) {
       const isPostPut = methodName.toLowerCase().includes('post') || 
                         methodName.toLowerCase().includes('put') ||
                         methodName.toLowerCase().includes('delete') ||
+                        // 检查 ajax.post(), ajax.put() 等
+                        (methodName.includes('ajax.') && (
+                          methodName.toLowerCase().includes('.post') ||
+                          methodName.toLowerCase().includes('.put') ||
+                          methodName.toLowerCase().includes('.delete')
+                        )) ||
                         // 检查 props.dispatch 中的 type 是否包含操作关键词
                         (methodName.includes('dispatch') && callPath.node.arguments.some(arg => {
                           if (t.isObjectExpression(arg)) {
@@ -624,8 +692,8 @@ function checkRule3(filePath, parsed, diff) {
           
           // 检查 .then() 回调
           const memberExpr = callPath.findParent(p => p.isMemberExpression());
-          if (memberExpr && t.isCallExpression(memberExpr.parent)) {
-            const thenCall = memberExpr.parent;
+          if (memberExpr && memberExpr.parentPath && t.isCallExpression(memberExpr.parentPath.node)) {
+            const thenCall = memberExpr.parentPath.node;
             if (t.isIdentifier(memberExpr.node.property) && memberExpr.node.property.name === 'then') {
               const successCallback = thenCall.arguments[0];
               if (successCallback) {
@@ -861,6 +929,13 @@ function isApiCall(callPath) {
         return true;
       }
     }
+    
+    // ajax.post(), ajax.get() 等（自定义 ajax 对象）
+    if (t.isIdentifier(object) && object.name === 'ajax') {
+      if (t.isIdentifier(property) && httpMethods.includes(property.name.toLowerCase())) {
+        return true;
+      }
+    }
   }
   
   // 3. 检查 axios({}) 或 axios.post() 等
@@ -984,17 +1059,28 @@ function runChecks() {
       const diff = getFileDiff(file);
 
       // 执行4项规则检查
-      const errors1 = checkRule1(file, parsed, diff);
-      const errors2 = checkRule2(file, parsed, diff);
-      const errors3 = checkRule3(file, parsed, diff);
-      const errors4 = checkRule4(file, parsed, diff);
+      try {
+        const errors1 = checkRule1(file, parsed, diff);
+        const errors2 = checkRule2(file, parsed, diff);
+        const errors3 = checkRule3(file, parsed, diff);
+        const errors4 = checkRule4(file, parsed, diff);
 
-      if (errors1) allErrors.push(...errors1);
-      if (errors2) allErrors.push(...errors2);
-      if (errors3) allErrors.push(...errors3);
-      if (errors4) allErrors.push(...errors4);
+        if (errors1) allErrors.push(...errors1);
+        if (errors2) allErrors.push(...errors2);
+        if (errors3) allErrors.push(...errors3);
+        if (errors4) allErrors.push(...errors4);
+      } catch (checkError) {
+        // 如果检查规则时出错，记录错误但继续检查其他文件
+        console.warn(chalk.yellow(`⚠️  检查文件 ${file} 的规则时出错: ${checkError.message}`));
+        // 如果错误是严重的（如语法错误），可以考虑阻止提交
+        if (checkError.message.includes('traverse') || checkError.message.includes('scope')) {
+          console.error(chalk.red(`❌ 检查工具内部错误，请检查代码或联系维护人员`));
+          // 不阻止提交，但记录错误
+        }
+      }
     } catch (error) {
       console.warn(chalk.yellow(`⚠️  检查文件 ${file} 时出错: ${error.message}`));
+      // 解析文件失败时，跳过该文件
     }
   }
 

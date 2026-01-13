@@ -15,6 +15,7 @@ const traverse = require('@babel/traverse').default;
 const t = require('@babel/types');
 const chalk = require('chalk');
 const { execSync } = require('child_process');
+const glob = require('glob');
 
 // 加载配置
 let config;
@@ -750,6 +751,37 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
     }
   }
 
+  // 检查是否使用了 declareRequest 定义的 loading（防重复提交）
+  if (!hasProtection && hasApiCall) {
+    // 查找函数中的所有接口调用
+    let foundDeclareRequestLoading = false;
+    path.traverse({
+      CallExpression(apiCallPath) {
+        if (isApiCall(apiCallPath)) {
+          const actionName = getActionNameFromCall(apiCallPath);
+          if (actionName) {
+            const declareRequestInfo = findDeclareRequestLoading(actionName, filePath);
+            if (declareRequestInfo && declareRequestInfo.loadingName) {
+              // 检查页面中是否使用了这个 loading（在按钮上绑定）
+              const handlerName = handler.name.replace(/['"()]/g, '').trim();
+              // 检查按钮是否绑定了这个 loading
+              const buttonLoadingPattern = new RegExp(`<Button[^>]*onClick.*${handlerName}[^>]*loading=\\{([^}]*\\b${declareRequestInfo.loadingName}\\b[^}]*)\\}`, 'i');
+              const buttonLoadingPattern2 = new RegExp(`<Button[^>]*loading=\\{([^}]*\\b${declareRequestInfo.loadingName}\\b[^}]*)\\}[^>]*onClick.*${handlerName}`, 'i');
+              
+              if (buttonLoadingPattern.test(parsed.template || parsed.content) || 
+                  buttonLoadingPattern2.test(parsed.template || parsed.content) ||
+                  checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, parsed.content, parsed.template)) {
+                foundDeclareRequestLoading = true;
+                hasProtection = true;
+                apiCallPath.stop();
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
   if (hasApiCall && !hasProtection) {
     const line = handler.line || path.node.loc?.start.line || 0;
     errors.push({
@@ -899,6 +931,20 @@ function checkRule2(filePath, parsed, diff) {
               }
               currentPath = currentPath.parentPath;
               if (hasLoading) break;
+            }
+          }
+          
+          // 检查是否使用了 declareRequest 定义的 loading
+          if (!hasLoading) {
+            const actionName = getActionNameFromCall(callPath);
+            if (actionName) {
+              const declareRequestInfo = findDeclareRequestLoading(actionName, filePath);
+              if (declareRequestInfo && declareRequestInfo.loadingName) {
+                // 检查页面中是否使用了这个 loading
+                if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, template)) {
+                  hasLoading = true;
+                }
+              }
             }
           }
         }
@@ -1197,6 +1243,170 @@ function getMethodName(callee) {
     return getMethodName(callee.callee);
   }
   return '';
+}
+
+/**
+ * 从接口调用中提取 Action 名称
+ * 例如：props.GetLabelTypePullDownAction() -> GetLabelTypePullDownAction
+ */
+function getActionNameFromCall(callPath) {
+  if (t.isMemberExpression(callPath.node.callee)) {
+    const property = callPath.node.callee.property;
+    if (t.isIdentifier(property) && property.name.endsWith('Action')) {
+      return property.name;
+    }
+  }
+  return null;
+}
+
+/**
+ * 从文件中查找 declareRequest 定义并提取 loading 名称
+ * 例如：export const GetLabelTypePullDownAction = declareRequest('pageLoading', ...)
+ * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'pageLoading' }
+ */
+function findDeclareRequestLoading(actionName, filePath) {
+  if (!actionName) return null;
+  
+  try {
+    // 获取项目根目录
+    const projectRoot = process.cwd();
+    
+    // 常见的接口定义文件位置
+    const searchPaths = [
+      path.join(projectRoot, 'src/**/*.{js,jsx,ts,tsx}'),
+      path.join(projectRoot, '**/action*.{js,jsx,ts,tsx}'),
+      path.join(projectRoot, '**/api*.{js,jsx,ts,tsx}'),
+      path.join(projectRoot, '**/service*.{js,jsx,ts,tsx}'),
+    ];
+    
+    // 从当前文件所在目录开始查找
+    const currentDir = path.dirname(filePath);
+    searchPaths.unshift(path.join(currentDir, '**/*.{js,jsx,ts,tsx}'));
+    
+    // 查找所有可能的文件
+    const files = [];
+    for (const pattern of searchPaths) {
+      try {
+        const matches = glob.sync(pattern, { ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'] });
+        files.push(...matches);
+      } catch (e) {
+        // 忽略错误，继续查找
+      }
+    }
+    
+    // 去重
+    const uniqueFiles = [...new Set(files)];
+    
+    // 遍历文件查找 declareRequest 定义
+    for (const file of uniqueFiles) {
+      if (!fs.existsSync(file)) continue;
+      
+      try {
+        const content = fs.readFileSync(file, 'utf-8');
+        
+        // 检查是否包含目标 Action 名称
+        if (!content.includes(actionName) || !content.includes('declareRequest')) {
+          continue;
+        }
+        
+        // 解析文件
+        const ast = parser.parse(content, {
+          sourceType: 'module',
+          plugins: ['typescript', 'jsx', 'decorators-legacy', 'classProperties']
+        });
+        
+        // 查找 declareRequest 调用
+        let found = null;
+        traverse(ast, {
+          VariableDeclarator(path) {
+            if (t.isIdentifier(path.node.id) && path.node.id.name === actionName) {
+              if (t.isCallExpression(path.node.init)) {
+                const callee = path.node.init.callee;
+                if (t.isIdentifier(callee) && callee.name === 'declareRequest') {
+                  // 提取第一个参数（loading 名称）
+                  const args = path.node.init.arguments;
+                  if (args.length > 0 && t.isStringLiteral(args[0])) {
+                    found = {
+                      actionName: actionName,
+                      loadingName: args[0].value
+                    };
+                    path.stop();
+                  }
+                }
+              }
+            }
+          },
+          AssignmentExpression(path) {
+            if (t.isMemberExpression(path.node.left)) {
+              const property = path.node.left.property;
+              if (t.isIdentifier(property) && property.name === actionName) {
+                if (t.isCallExpression(path.node.right)) {
+                  const callee = path.node.right.callee;
+                  if (t.isIdentifier(callee) && callee.name === 'declareRequest') {
+                    const args = path.node.right.arguments;
+                    if (args.length > 0 && t.isStringLiteral(args[0])) {
+                      found = {
+                        actionName: actionName,
+                        loadingName: args[0].value
+                      };
+                      path.stop();
+                    }
+                  }
+                }
+              }
+            }
+          }
+        });
+        
+        if (found) {
+          return found;
+        }
+      } catch (e) {
+        // 解析失败，跳过该文件
+        continue;
+      }
+    }
+  } catch (e) {
+    // 查找失败，返回 null
+  }
+  
+  return null;
+}
+
+/**
+ * 检查页面中是否使用了 declareRequest 定义的 loading
+ * 例如：const { pageLoading } = props.global; 和 <Spin spinning={pageLoading}>
+ */
+function checkDeclareRequestLoadingUsage(loadingName, content, template = '') {
+  if (!loadingName) return false;
+  
+  // 检查解构赋值：const { pageLoading } = props.global;
+  const destructurePattern = new RegExp(`const\\s*\\{[^}]*\\b${loadingName}\\b[^}]*\\}\\s*=\\s*props\\.(global|\\w+)`, 'i');
+  if (destructurePattern.test(content)) {
+    return true;
+  }
+  
+  // 检查直接使用：props.global.pageLoading 或 props.xxx.pageLoading
+  const directPattern = new RegExp(`props\\.(global|\\w+)\\.${loadingName}`, 'i');
+  if (directPattern.test(content) || directPattern.test(template)) {
+    return true;
+  }
+  
+  // 检查模板中使用：<Spin spinning={pageLoading}> 或 <Button loading={pageLoading}>
+  const templatePatterns = [
+    new RegExp(`<Spin[^>]*spinning=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i'),
+    new RegExp(`<Button[^>]*loading=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i'),
+    new RegExp(`spinning=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i'),
+    new RegExp(`loading=\\{([^}]*\\b${loadingName}\\b[^}]*)\\}`, 'i')
+  ];
+  
+  for (const pattern of templatePatterns) {
+    if (pattern.test(template) || pattern.test(content)) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 /**

@@ -760,7 +760,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
         if (isApiCall(apiCallPath)) {
           const actionName = getActionNameFromCall(apiCallPath);
           if (actionName) {
-            const declareRequestInfo = findDeclareRequestLoading(actionName, filePath);
+            const declareRequestInfo = findDeclareRequestLoading(actionName, filePath, parsed.ast);
             if (declareRequestInfo && declareRequestInfo.loadingName) {
               // 检查页面中是否使用了这个 loading（在按钮上绑定）
               const handlerName = handler.name.replace(/['"()]/g, '').trim();
@@ -938,7 +938,7 @@ function checkRule2(filePath, parsed, diff) {
           if (!hasLoading) {
             const actionName = getActionNameFromCall(callPath);
             if (actionName) {
-              const declareRequestInfo = findDeclareRequestLoading(actionName, filePath);
+              const declareRequestInfo = findDeclareRequestLoading(actionName, filePath, ast);
               if (declareRequestInfo && declareRequestInfo.loadingName) {
                 // 检查页面中是否使用了这个 loading
                 if (checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, content, template)) {
@@ -1260,42 +1260,176 @@ function getActionNameFromCall(callPath) {
 }
 
 /**
+ * 从文件中解析 namespace 导入，找到对应的接口文件路径
+ * 例如：import { NS_COURSELIBRARY, NS_GLOBAL } from '~/enumerate/namespace';
+ * 返回：namespace 到文件路径的映射
+ */
+function parseNamespaceImports(ast, filePath) {
+  const namespaceMap = {};
+  
+  if (!ast) return namespaceMap;
+  
+  try {
+    traverse(ast, {
+      ImportDeclaration(path) {
+        const source = path.node.source.value;
+        // 检查是否是 namespace 导入
+        if (source.includes('namespace') || source.includes('enumerate')) {
+          const specifiers = path.node.specifiers;
+          for (const specifier of specifiers) {
+            if (t.isImportSpecifier(specifier) && t.isIdentifier(specifier.imported)) {
+              const namespaceName = specifier.imported.name;
+              // 解析导入路径，找到对应的接口文件
+              const namespaceFile = resolveNamespaceFile(source, filePath);
+              if (namespaceFile) {
+                namespaceMap[namespaceName] = namespaceFile;
+              }
+            }
+          }
+        }
+      }
+    });
+  } catch (e) {
+    // 解析失败，返回空映射
+  }
+  
+  return namespaceMap;
+}
+
+/**
+ * 解析 namespace 文件路径
+ * 例如：'~/enumerate/namespace' -> 实际文件路径
+ */
+function resolveNamespaceFile(importPath, currentFilePath) {
+  try {
+    const projectRoot = process.cwd();
+    
+    // 处理 ~ 别名
+    if (importPath.startsWith('~/')) {
+      importPath = importPath.replace('~/', 'src/');
+    }
+    
+    // 尝试多个可能的路径
+    const possiblePaths = [
+      path.join(projectRoot, importPath + '.js'),
+      path.join(projectRoot, importPath + '.ts'),
+      path.join(projectRoot, importPath + '.jsx'),
+      path.join(projectRoot, importPath + '.tsx'),
+      path.join(path.dirname(currentFilePath), importPath + '.js'),
+      path.join(path.dirname(currentFilePath), importPath + '.ts'),
+    ];
+    
+    for (const possiblePath of possiblePaths) {
+      if (fs.existsSync(possiblePath)) {
+        return possiblePath;
+      }
+    }
+  } catch (e) {
+    // 解析失败
+  }
+  
+  return null;
+}
+
+/**
+ * 从 namespace 文件中查找接口文件路径
+ * namespace 文件通常包含类似：export const NS_COURSELIBRARY = 'courseLibrary';
+ * 然后根据这个值找到对应的接口文件
+ */
+function findActionFileFromNamespace(namespaceFile, namespaceName) {
+  if (!namespaceFile || !fs.existsSync(namespaceFile)) return null;
+  
+  try {
+    const content = fs.readFileSync(namespaceFile, 'utf-8');
+    const ast = parser.parse(content, {
+      sourceType: 'module',
+      plugins: ['typescript', 'jsx', 'decorators-legacy', 'classProperties']
+    });
+    
+    let namespaceValue = null;
+    traverse(ast, {
+      VariableDeclarator(path) {
+        if (t.isIdentifier(path.node.id) && path.node.id.name === namespaceName) {
+          if (t.isStringLiteral(path.node.init)) {
+            namespaceValue = path.node.init.value;
+            path.stop();
+          }
+        }
+      }
+    });
+    
+    if (namespaceValue) {
+      // 根据 namespace 值找到接口文件
+      // 通常接口文件在 src/models/ 或 src/services/ 目录下
+      const projectRoot = process.cwd();
+      const possiblePaths = [
+        path.join(projectRoot, 'src', 'models', namespaceValue + '.js'),
+        path.join(projectRoot, 'src', 'models', namespaceValue + '.ts'),
+        path.join(projectRoot, 'src', 'services', namespaceValue + '.js'),
+        path.join(projectRoot, 'src', 'services', namespaceValue + '.ts'),
+        path.join(projectRoot, 'src', namespaceValue + '.js'),
+        path.join(projectRoot, 'src', namespaceValue + '.ts'),
+      ];
+      
+      for (const possiblePath of possiblePaths) {
+        if (fs.existsSync(possiblePath)) {
+          return possiblePath;
+        }
+      }
+    }
+  } catch (e) {
+    // 解析失败
+  }
+  
+  return null;
+}
+
+/**
  * 从文件中查找 declareRequest 定义并提取 loading 名称
  * 例如：export const GetLabelTypePullDownAction = declareRequest('pageLoading', ...)
  * 返回：{ actionName: 'GetLabelTypePullDownAction', loadingName: 'pageLoading' }
  */
-function findDeclareRequestLoading(actionName, filePath) {
+function findDeclareRequestLoading(actionName, filePath, ast) {
   if (!actionName) return null;
   
   try {
-    // 获取项目根目录
-    const projectRoot = process.cwd();
+    // 首先尝试从当前文件的 namespace 导入中找到接口文件
+    const namespaceMap = parseNamespaceImports(ast, filePath);
+    const actionFiles = [];
     
-    // 常见的接口定义文件位置
-    const searchPaths = [
-      path.join(projectRoot, 'src/**/*.{js,jsx,ts,tsx}'),
-      path.join(projectRoot, '**/action*.{js,jsx,ts,tsx}'),
-      path.join(projectRoot, '**/api*.{js,jsx,ts,tsx}'),
-      path.join(projectRoot, '**/service*.{js,jsx,ts,tsx}'),
-    ];
+    // 根据 namespace 找到接口文件
+    for (const [namespaceName, namespaceFile] of Object.entries(namespaceMap)) {
+      const actionFile = findActionFileFromNamespace(namespaceFile, namespaceName);
+      if (actionFile) {
+        actionFiles.push(actionFile);
+      }
+    }
     
-    // 从当前文件所在目录开始查找
-    const currentDir = path.dirname(filePath);
-    searchPaths.unshift(path.join(currentDir, '**/*.{js,jsx,ts,tsx}'));
-    
-    // 查找所有可能的文件
-    const files = [];
-    for (const pattern of searchPaths) {
-      try {
-        const matches = glob.sync(pattern, { ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'] });
-        files.push(...matches);
-      } catch (e) {
-        // 忽略错误，继续查找
+    // 如果没找到，使用通用搜索
+    if (actionFiles.length === 0) {
+      const projectRoot = process.cwd();
+      const searchPaths = [
+        path.join(projectRoot, 'src/**/*.{js,jsx,ts,tsx}'),
+        path.join(projectRoot, '**/action*.{js,jsx,ts,tsx}'),
+        path.join(projectRoot, '**/api*.{js,jsx,ts,tsx}'),
+        path.join(projectRoot, '**/service*.{js,jsx,ts,tsx}'),
+      ];
+      
+      const currentDir = path.dirname(filePath);
+      searchPaths.unshift(path.join(currentDir, '**/*.{js,jsx,ts,tsx}'));
+      
+      for (const pattern of searchPaths) {
+        try {
+          const matches = glob.sync(pattern, { ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'] });
+          actionFiles.push(...matches);
+        } catch (e) {
+          // 忽略错误
+        }
       }
     }
     
     // 去重
-    const uniqueFiles = [...new Set(files)];
+    const uniqueFiles = [...new Set(actionFiles)];
     
     // 遍历文件查找 declareRequest 定义
     for (const file of uniqueFiles) {
@@ -1310,14 +1444,14 @@ function findDeclareRequestLoading(actionName, filePath) {
         }
         
         // 解析文件
-        const ast = parser.parse(content, {
+        const fileAst = parser.parse(content, {
           sourceType: 'module',
           plugins: ['typescript', 'jsx', 'decorators-legacy', 'classProperties']
         });
         
         // 查找 declareRequest 调用
         let found = null;
-        traverse(ast, {
+        traverse(fileAst, {
           VariableDeclarator(path) {
             if (t.isIdentifier(path.node.id) && path.node.id.name === actionName) {
               if (t.isCallExpression(path.node.init)) {
@@ -1326,11 +1460,15 @@ function findDeclareRequestLoading(actionName, filePath) {
                   // 提取第一个参数（loading 名称）
                   const args = path.node.init.arguments;
                   if (args.length > 0 && t.isStringLiteral(args[0])) {
-                    found = {
-                      actionName: actionName,
-                      loadingName: args[0].value
-                    };
-                    path.stop();
+                    const loadingName = args[0].value;
+                    // 检查第一个参数是否包含 loading（如 'pageLoading'）
+                    if (loadingName.toLowerCase().includes('loading')) {
+                      found = {
+                        actionName: actionName,
+                        loadingName: loadingName
+                      };
+                      path.stop();
+                    }
                   }
                 }
               }
@@ -1345,11 +1483,14 @@ function findDeclareRequestLoading(actionName, filePath) {
                   if (t.isIdentifier(callee) && callee.name === 'declareRequest') {
                     const args = path.node.right.arguments;
                     if (args.length > 0 && t.isStringLiteral(args[0])) {
-                      found = {
-                        actionName: actionName,
-                        loadingName: args[0].value
-                      };
-                      path.stop();
+                      const loadingName = args[0].value;
+                      if (loadingName.toLowerCase().includes('loading')) {
+                        found = {
+                          actionName: actionName,
+                          loadingName: loadingName
+                        };
+                        path.stop();
+                      }
                     }
                   }
                 }

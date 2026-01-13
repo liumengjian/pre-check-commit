@@ -331,6 +331,32 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
   }
 
   // 使用 path.traverse 而不是独立的 traverse，这样可以正确传递 scope 和 parentPath
+  let loadingVarName = null; // 记录loading变量名
+  
+  // 首先检查模板中是否有loading绑定
+  if (parsed.template) {
+    const handlerName = handler.name.replace(/['"()]/g, '').trim();
+    // 检查按钮是否有loading属性绑定
+    const loadingPatterns = [
+      new RegExp(`<[^>]*${handlerName}[^>]*:loading`, 'i'),
+      new RegExp(`<[^>]*${handlerName}[^>]*loading=`, 'i'),
+      new RegExp(`<[^>]*loading.*${handlerName}`, 'i'),
+      new RegExp(`<Button[^>]*loading=\{([^}]+)\}[^>]*onClick.*${handlerName}`, 'i'),
+      new RegExp(`<Button[^>]*onClick.*${handlerName}[^>]*loading=\{([^}]+)\}`, 'i')
+    ];
+    
+    for (const pattern of loadingPatterns) {
+      const match = parsed.template.match(pattern);
+      if (match) {
+        // 提取loading变量名
+        if (match[1]) {
+          loadingVarName = match[1].trim().replace(/['"{}]/g, '');
+        }
+        break;
+      }
+    }
+  }
+  
   path.traverse({
     CallExpression(callPath) {
       // 使用新的 isApiCall 函数检测接口调用
@@ -340,6 +366,7 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
         // 检查是否有防重复提交保护
         // 1. 检查是否有防抖/节流包装
         // 2. 检查是否有状态锁
+        // 3. 检查是否有loading状态管理（新增：接口调用前设置loading为true，调用后设置为false）
 
         // 检查防抖/节流
         let currentPath = callPath;
@@ -371,36 +398,180 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
           if (!currentPath) break;
         }
 
-        // 检查状态锁（在接口调用前后）
+        // 检查loading状态管理（新增逻辑）
         const parentFunc = callPath.findParent(p => p.isFunction());
         if (parentFunc && t.isBlockStatement(parentFunc.node.body)) {
           const statements = parentFunc.node.body.body;
-          const callIndex = statements.findIndex(s => {
-            if (t.isExpressionStatement(s)) {
-              return s.expression === callPath.node ||
-                (t.isCallExpression(s.expression) && s.expression === callPath.node);
+          
+          // 查找接口调用在函数体中的位置
+          let callIndex = -1;
+          for (let i = 0; i < statements.length; i++) {
+            const stmt = statements[i];
+            // 检查是否是包含接口调用的语句
+            if (t.isExpressionStatement(stmt)) {
+              if (stmt.expression === callPath.node || 
+                  (t.isCallExpression(stmt.expression) && stmt.expression === callPath.node)) {
+                callIndex = i;
+                break;
+              }
+              // 检查是否是赋值语句，右侧是接口调用
+              if (t.isAssignmentExpression(stmt.expression) && 
+                  t.isCallExpression(stmt.expression.right) &&
+                  stmt.expression.right === callPath.node) {
+                callIndex = i;
+                break;
+              }
             }
-            return false;
-          });
-
+            // 检查是否是变量声明，初始值是接口调用
+            if (t.isVariableDeclaration(stmt)) {
+              for (const declarator of stmt.declarations) {
+                if (t.isCallExpression(declarator.init) && declarator.init === callPath.node) {
+                  callIndex = i;
+                  break;
+                }
+              }
+              if (callIndex >= 0) break;
+            }
+          }
+          
           if (callIndex >= 0) {
-            // 检查调用前是否有状态锁设为 true
+            // 检查调用前是否有设置loading为true
+            let loadingSetBefore = false;
+            let loadingVarBefore = null;
+            
             for (let i = 0; i < callIndex; i++) {
               const stmt = statements[i];
               if (t.isExpressionStatement(stmt) && t.isAssignmentExpression(stmt.expression)) {
                 const left = stmt.expression.left;
                 const right = stmt.expression.right;
+                
                 if (t.isIdentifier(left)) {
                   const varName = left.name;
-                  if ((varName.includes('Submitting') || varName.includes('Loading') ||
-                    varName.includes('loading') || varName.includes('submitting')) &&
-                    (t.isBooleanLiteral(right) && right.value === true ||
-                      t.isUnaryExpression(right) && right.operator === '!' &&
-                      t.isBooleanLiteral(right.argument) && right.argument.value === false)) {
-                    // 检查调用后是否有状态锁设为 false（在 then/catch/finally 中）
-                    // 检查后续语句或 then/catch 回调
-                    hasProtection = true; // 暂时认为有保护，更详细的检查需要分析 Promise 链
-                    break;
+                  // 检查是否是loading相关的变量
+                  const isLoadingVar = varName.toLowerCase().includes('loading') || 
+                                      varName.toLowerCase().includes('submitting') ||
+                                      (loadingVarName && varName === loadingVarName);
+                  
+                  if (isLoadingVar) {
+                    // 检查是否设置为true
+                    if (t.isBooleanLiteral(right) && right.value === true) {
+                      loadingSetBefore = true;
+                      loadingVarBefore = varName;
+                      break;
+                    } else if (t.isUnaryExpression(right) && right.operator === '!' &&
+                               t.isBooleanLiteral(right.argument) && right.argument.value === false) {
+                      loadingSetBefore = true;
+                      loadingVarBefore = varName;
+                      break;
+                    }
+                  }
+                } else if (t.isMemberExpression(left)) {
+                  // 检查 this.loading = true 或 setState({ loading: true })
+                  const prop = left.property;
+                  if (t.isIdentifier(prop)) {
+                    const propName = prop.name;
+                    const isLoadingProp = propName.toLowerCase().includes('loading') ||
+                                        propName.toLowerCase().includes('submitting');
+                    if (isLoadingProp && 
+                        (t.isBooleanLiteral(right) && right.value === true ||
+                         (t.isUnaryExpression(right) && right.operator === '!' &&
+                          t.isBooleanLiteral(right.argument) && right.argument.value === false))) {
+                      loadingSetBefore = true;
+                      loadingVarBefore = propName;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+            
+            // 如果调用前设置了loading为true，检查调用后是否设置为false
+            if (loadingSetBefore && loadingVarBefore) {
+              // 检查Promise链中是否有设置loading为false
+              let currentPath = callPath;
+              let foundLoadingReset = false;
+              
+              // 向上查找Promise链（.then(), .catch(), .finally()）
+              while (currentPath && currentPath.parentPath) {
+                if (currentPath.parentPath.isMemberExpression()) {
+                  const prop = currentPath.parentPath.node.property;
+                  if (t.isIdentifier(prop) && 
+                      (prop.name === 'then' || prop.name === 'catch' || prop.name === 'finally')) {
+                    // 找到Promise链，检查回调中是否有设置loading为false
+                    const thenCall = currentPath.parentPath.parentPath;
+                    if (thenCall && thenCall.isCallExpression()) {
+                      const callbacks = thenCall.node.arguments;
+                      for (const callback of callbacks) {
+                        if (callback && (t.isArrowFunctionExpression(callback) || t.isFunctionExpression(callback))) {
+                          const callbackBody = callback.body;
+                          if (t.isBlockStatement(callbackBody)) {
+                            // 检查回调函数体中是否有设置loading为false
+                            for (const callbackStmt of callbackBody.body) {
+                              if (t.isExpressionStatement(callbackStmt) && 
+                                  t.isAssignmentExpression(callbackStmt.expression)) {
+                                const left = callbackStmt.expression.left;
+                                const right = callbackStmt.expression.right;
+                                
+                                // 检查是否是同一个loading变量
+                                let isSameLoadingVar = false;
+                                if (t.isIdentifier(left) && left.name === loadingVarBefore) {
+                                  isSameLoadingVar = true;
+                                } else if (t.isMemberExpression(left)) {
+                                  const prop = left.property;
+                                  if (t.isIdentifier(prop) && prop.name === loadingVarBefore) {
+                                    isSameLoadingVar = true;
+                                  }
+                                }
+                                
+                                if (isSameLoadingVar) {
+                                  // 检查是否设置为false
+                                  if (t.isBooleanLiteral(right) && right.value === false) {
+                                    foundLoadingReset = true;
+                                    break;
+                                  } else if (t.isUnaryExpression(right) && right.operator === '!' &&
+                                             t.isBooleanLiteral(right.argument) && right.argument.value === true) {
+                                    foundLoadingReset = true;
+                                    break;
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                        if (foundLoadingReset) break;
+                      }
+                    }
+                  }
+                }
+                currentPath = currentPath.parentPath;
+                if (foundLoadingReset) break;
+              }
+              
+              // 如果找到了loading的设置和重置，认为有防重复提交保护
+              if (foundLoadingReset) {
+                hasProtection = true;
+              }
+            }
+            
+            // 原有的状态锁检查逻辑（保留兼容性）
+            if (!hasProtection) {
+              for (let i = 0; i < callIndex; i++) {
+                const stmt = statements[i];
+                if (t.isExpressionStatement(stmt) && t.isAssignmentExpression(stmt.expression)) {
+                  const left = stmt.expression.left;
+                  const right = stmt.expression.right;
+                  if (t.isIdentifier(left)) {
+                    const varName = left.name;
+                    if ((varName.includes('Submitting') || varName.includes('Loading') ||
+                      varName.includes('loading') || varName.includes('submitting')) &&
+                      (t.isBooleanLiteral(right) && right.value === true ||
+                        t.isUnaryExpression(right) && right.operator === '!' &&
+                        t.isBooleanLiteral(right.argument) && right.argument.value === false)) {
+                      // 检查调用后是否有状态锁设为 false（在 then/catch/finally 中）
+                      // 检查后续语句或 then/catch 回调
+                      hasProtection = true; // 暂时认为有保护，更详细的检查需要分析 Promise 链
+                      break;
+                    }
                   }
                 }
               }

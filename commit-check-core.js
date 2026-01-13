@@ -1332,12 +1332,14 @@ function resolveNamespaceFile(importPath, currentFilePath) {
 }
 
 /**
- * 从 namespace 文件中查找接口文件路径
+ * 从 namespace 文件中查找所有 namespace 的值
  * namespace 文件通常包含类似：export const NS_COURSELIBRARY = 'courseLibrary';
- * 然后根据这个值找到对应的接口文件
+ * 返回：{ NS_COURSELIBRARY: 'courseLibrary', NS_GLOBAL: 'global' }
  */
-function findActionFileFromNamespace(namespaceFile, namespaceName) {
-  if (!namespaceFile || !fs.existsSync(namespaceFile)) return null;
+function parseNamespaceValues(namespaceFile) {
+  const namespaceValues = {};
+  
+  if (!namespaceFile || !fs.existsSync(namespaceFile)) return namespaceValues;
   
   try {
     const content = fs.readFileSync(namespaceFile, 'utf-8');
@@ -1346,42 +1348,54 @@ function findActionFileFromNamespace(namespaceFile, namespaceName) {
       plugins: ['typescript', 'jsx', 'decorators-legacy', 'classProperties']
     });
     
-    let namespaceValue = null;
     traverse(ast, {
       VariableDeclarator(path) {
-        if (t.isIdentifier(path.node.id) && path.node.id.name === namespaceName) {
+        if (t.isIdentifier(path.node.id) && path.node.id.name.startsWith('NS_')) {
           if (t.isStringLiteral(path.node.init)) {
-            namespaceValue = path.node.init.value;
-            path.stop();
+            namespaceValues[path.node.id.name] = path.node.init.value;
           }
         }
       }
     });
-    
-    if (namespaceValue) {
-      // 根据 namespace 值找到接口文件
-      // 通常接口文件在 src/models/ 或 src/services/ 目录下
-      const projectRoot = process.cwd();
-      const possiblePaths = [
-        path.join(projectRoot, 'src', 'models', namespaceValue + '.js'),
-        path.join(projectRoot, 'src', 'models', namespaceValue + '.ts'),
-        path.join(projectRoot, 'src', 'services', namespaceValue + '.js'),
-        path.join(projectRoot, 'src', 'services', namespaceValue + '.ts'),
-        path.join(projectRoot, 'src', namespaceValue + '.js'),
-        path.join(projectRoot, 'src', namespaceValue + '.ts'),
-      ];
-      
-      for (const possiblePath of possiblePaths) {
-        if (fs.existsSync(possiblePath)) {
-          return possiblePath;
-        }
-      }
-    }
   } catch (e) {
     // 解析失败
   }
   
-  return null;
+  return namespaceValues;
+}
+
+/**
+ * 根据 namespace 值找到对应的接口文件路径
+ * 例如：'global' -> 'src/api/global/index.js'
+ *      'courseLibrary' -> 'src/api/courseLibrary/index.js'
+ */
+function getActionFilesFromNamespaceValues(namespaceValues) {
+  const actionFiles = [];
+  const projectRoot = process.cwd();
+  
+  for (const namespaceValue of Object.values(namespaceValues)) {
+    // 根据示例，接口文件在 src/api/{namespaceValue}/index.js
+    const possiblePaths = [
+      path.join(projectRoot, 'src', 'api', namespaceValue, 'index.js'),
+      path.join(projectRoot, 'src', 'api', namespaceValue, 'index.ts'),
+      path.join(projectRoot, 'src', 'api', namespaceValue, 'index.jsx'),
+      path.join(projectRoot, 'src', 'api', namespaceValue, 'index.tsx'),
+      // 兼容其他可能的路径
+      path.join(projectRoot, 'src', 'models', namespaceValue, 'index.js'),
+      path.join(projectRoot, 'src', 'models', namespaceValue, 'index.ts'),
+      path.join(projectRoot, 'src', 'services', namespaceValue, 'index.js'),
+      path.join(projectRoot, 'src', 'services', namespaceValue, 'index.ts'),
+    ];
+    
+    for (const possiblePath of possiblePaths) {
+      if (fs.existsSync(possiblePath)) {
+        actionFiles.push(possiblePath);
+        break; // 找到一个就停止
+      }
+    }
+  }
+  
+  return actionFiles;
 }
 
 /**
@@ -1398,10 +1412,15 @@ function findDeclareRequestLoading(actionName, filePath, ast) {
     const actionFiles = [];
     
     // 根据 namespace 找到接口文件
+    // 1. 找到 namespace 文件（如 ~/enumerate/namespace）
     for (const [namespaceName, namespaceFile] of Object.entries(namespaceMap)) {
-      const actionFile = findActionFileFromNamespace(namespaceFile, namespaceName);
-      if (actionFile) {
-        actionFiles.push(actionFile);
+      if (namespaceFile && fs.existsSync(namespaceFile)) {
+        // 2. 解析 namespace 文件，获取所有 namespace 的值
+        const namespaceValues = parseNamespaceValues(namespaceFile);
+        
+        // 3. 根据 namespace 值找到对应的接口文件（如 src/api/global/index.js）
+        const files = getActionFilesFromNamespaceValues(namespaceValues);
+        actionFiles.push(...files);
       }
     }
     

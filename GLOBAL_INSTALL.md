@@ -14,15 +14,19 @@ npm install -g prina-pre-commit-check
 
 在项目根目录执行：
 
+**Windows (PowerShell/CMD):**
+```powershell
+npx pre-commit-check --init
+```
+
+**Linux/Mac:**
 ```bash
 pre-commit-check --init
-```
-
-或
-
-```bash
+# 或
 pre-commit-check-init
 ```
+
+**注意**：Windows 上全局安装的 npm 包可能无法直接运行，建议使用 `npx` 命令。
 
 这会自动完成：
 1. ✅ 检查是否是 Git 仓库
@@ -77,7 +81,10 @@ chmod +x .husky/pre-commit
 
 **Windows (PowerShell):**
 ```powershell
-# 获取全局包路径
+# 方法1：使用 npx（推荐）
+npx pre-commit-check --init
+
+# 方法2：手动复制配置文件
 $globalPath = npm root -g
 Copy-Item "$globalPath\prina-pre-commit-check\commit-check.config.js" .
 ```
@@ -95,6 +102,12 @@ cp "$GLOBAL_PATH/prina-pre-commit-check/commit-check.config.js" .
 
 运行诊断命令检查配置：
 
+**Windows:**
+```powershell
+npx pre-commit-check-diagnose
+```
+
+**Linux/Mac:**
 ```bash
 pre-commit-check-diagnose
 ```

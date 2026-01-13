@@ -48,11 +48,19 @@ npm install -g prina-pre-commit-check
 
 进入项目目录，执行初始化命令：
 
+**Windows (PowerShell/CMD):**
+```powershell
+npx pre-commit-check --init
+```
+
+**Linux/Mac:**
 ```bash
 pre-commit-check --init
 # 或
 pre-commit-check-init
 ```
+
+**注意**：Windows 上建议使用 `npx` 命令运行全局安装的包。
 
 **注意**：全局安装后，husky 仍需在项目中本地安装：
 

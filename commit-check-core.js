@@ -416,8 +416,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
       new RegExp(`<[^>]*${handlerName}[^>]*:loading`, 'i'),
       new RegExp(`<[^>]*${handlerName}[^>]*loading=`, 'i'),
       new RegExp(`<[^>]*loading.*${handlerName}`, 'i'),
-      new RegExp(`<Button[^>]*loading=\{([^}]+)\}[^>]*onClick.*${handlerName}`, 'i'),
-      new RegExp(`<Button[^>]*onClick.*${handlerName}[^>]*loading=\{([^}]+)\}`, 'i')
+      // 检查 Button 组件的 loading 属性（只要Button有loading属性即可，不关心位置）
+      new RegExp(`<Button[\\s\\S]*?loading\\s*=\\s*\\{([^}]+)\\}`, 'i')
     ];
 
     for (const pattern of loadingPatterns) {
@@ -796,7 +796,9 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                   new RegExp(`loading\\s*:\\s*${escapedVarName}\\b`, 'i'), // 匹配 loading: loading (注意：需要单词边界)
                   new RegExp(`loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
                   new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*:\\s*${escapedVarName}\\b[^}]*\\}`, 'i'), // 匹配 okButtonProps={{ loading: loading }}
-                  new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i')
+                  new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i'),
+                  // 检查 Button 组件的 loading 属性（只要Button有loading属性，且值是正确的loading变量即可，不关心位置）
+                  new RegExp(`<Button[\\s\\S]*?loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i')
                 ];
                 
                 let foundInJSX = false;
@@ -1064,8 +1066,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                 const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapedHandlerName}`, 'i').test(formContent);
                 if (hasOnFinish) {
                   const formLoadingMatch = formContent.match(/loading\s*=\s*\{([^}]+)\}/i);
-                  const submitButtonLoadingMatch = formContent.match(/htmlType=["']submit["'][^>]*loading\s*=\s*\{([^}]+)\}/i) ||
-                    formContent.match(/loading\s*=\s*\{([^}]+)\}[^>]*htmlType=["']submit["']/i);
+                  // 检查 Form 内的 Button 是否有 loading 属性（只要Button有loading属性即可，不关心位置）
+                  const submitButtonLoadingMatch = formContent.match(/<Button[\\s\\S]*?loading\s*=\s*\{([^}]+)\}/i);
                   
                   if (formLoadingMatch || submitButtonLoadingMatch) {
                     const loadingValue = (formLoadingMatch ? formLoadingMatch[1] : submitButtonLoadingMatch[1]).trim();
@@ -1083,9 +1085,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                 }
               }
               
-              // 检查 Button 是否使用了错误的loading
-              const buttonLoadingMatch = templateWithoutComments.match(new RegExp(`<Button[^>]*onClick.*${escapedHandlerName}[^>]*loading\\s*=\\s*\\{([^}]+)\\}`, 'i')) ||
-                templateWithoutComments.match(new RegExp(`<Button[^>]*loading\\s*=\\s*\\{([^}]+)\\}[^>]*onClick.*${escapedHandlerName}`, 'i'));
+              // 检查 Button 是否使用了错误的loading（只要Button有loading属性即可，不关心位置）
+              const buttonLoadingMatch = templateWithoutComments.match(new RegExp(`<Button[\\s\\S]*?loading\\s*=\\s*\\{([^}]+)\\}`, 'i'));
               
               if (buttonLoadingMatch) {
                 const loadingValue = buttonLoadingMatch[1].trim();
@@ -1104,13 +1105,12 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
               // 这样可以检测到所有的问题
               
               // 检查 Button 是否绑定了 loading（如果上面的 Modal/Drawer/Popconfirm 检查都没有通过）
-              const buttonLoadingPattern = new RegExp(`<Button[^>]*onClick.*${escapedHandlerName}[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i');
-              const buttonLoadingPattern2 = new RegExp(`<Button[^>]*loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}[^>]*onClick.*${escapedHandlerName}`, 'i');
+              // 只要Button有loading属性，且值是正确的loading变量即可，不关心位置
+              const buttonLoadingPattern = new RegExp(`<Button[\\s\\S]*?loading=\\{[^}]*\\b${escapedLoadingName}\\b[^}]*\\}`, 'i');
               
               // 只有在没有使用错误的loading，且Modal/Drawer/Form有loading的情况下，才设置hasProtection
               if (!usedWrongLoading && !foundModalOrDrawerWithoutLoading) {
                 if (buttonLoadingPattern.test(templateWithoutComments) || 
-                    buttonLoadingPattern2.test(templateWithoutComments) ||
                     checkDeclareRequestLoadingUsage(declareRequestInfo.loadingName, fullContent, templateContent)) {
                   foundDeclareRequestLoading = true;
                   hasProtection = true;

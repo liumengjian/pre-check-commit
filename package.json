@@ -1,6 +1,6 @@
 {
   "name": "prina-pre-commit-check",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Git pre-commit hook for frontend code quality checks",
   "main": "commit-check-core.js",
   "bin": {

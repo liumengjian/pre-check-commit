@@ -496,37 +496,26 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
                   callIndex = i;
                   break;
                 }
-                // 检查是否是链式调用，如 props.xxxAction().then()
-                if (t.isMemberExpression(stmt.expression.callee)) {
-                  // 检查是否是接口调用后链式调用 .then()/.catch()
-                  let checkExpr = stmt.expression.callee;
-                  while (checkExpr && t.isMemberExpression(checkExpr)) {
-                    // 检查 object 是否是接口调用
-                    if (checkExpr.object === callPath.node) {
-                      callIndex = i;
-                      break;
-                    }
-                    // 继续向上查找
-                    checkExpr = checkExpr.object;
+                // 检查是否是链式调用，如 fetch().then() 或 props.xxxAction().then()
+                // 需要递归查找整个表达式树，找到接口调用
+                const findCallInExpression = (expr) => {
+                  if (!expr) return false;
+                  // 直接匹配
+                  if (expr === callPath.node) return true;
+                  // 如果是CallExpression，检查callee
+                  if (t.isCallExpression(expr)) {
+                    return findCallInExpression(expr.callee);
                   }
-                  if (callIndex >= 0) break;
-                }
-                // 检查是否是 CallExpression，callee 是 MemberExpression（如 props.xxxAction().then()）
-                if (t.isMemberExpression(stmt.expression.callee)) {
-                  let checkExpr = stmt.expression.callee.object;
-                  // 递归检查 MemberExpression 链
-                  while (checkExpr) {
-                    if (checkExpr === callPath.node) {
-                      callIndex = i;
-                      break;
-                    }
-                    if (t.isMemberExpression(checkExpr)) {
-                      checkExpr = checkExpr.object;
-                    } else {
-                      break;
-                    }
+                  // 如果是MemberExpression，检查object
+                  if (t.isMemberExpression(expr)) {
+                    return findCallInExpression(expr.object);
                   }
-                  if (callIndex >= 0) break;
+                  return false;
+                };
+                
+                if (findCallInExpression(stmt.expression)) {
+                  callIndex = i;
+                  break;
                 }
               }
               // 检查是否是赋值语句，右侧是接口调用
@@ -837,6 +826,8 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
 
   // 检查是否使用了 declareRequest 定义的 loading（防重复提交）
   // 同时检查：1. 定义了loading但没有使用；2. 使用了其他接口的loading
+  // 注意：只有在没有找到其他保护机制时，才检查definedButNotUsed和usedWrongLoading
+  // 如果在上面的path.traverse中已经设置了hasProtection = true，说明已经找到了有效的保护机制，就不需要再检查这些问题了
   if (!hasProtection && hasApiCall) {
     // 查找函数中的所有接口调用
     let foundDeclareRequestLoading = false;
@@ -903,7 +894,9 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
         new RegExp(`loading\\s*:\\s*${escapedVarName}\\b`, 'i'), // 匹配 loading: loading (注意：需要单词边界)
         new RegExp(`loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
         new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*:\\s*${escapedVarName}\\b[^}]*\\}`, 'i'), // 匹配 okButtonProps={{ loading: loading }}
-        new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i')
+        new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i'),
+        // 检查 Button 组件的 loading 属性（只要Button有loading属性，且值是正确的loading变量即可，不关心位置）
+        new RegExp(`<Button[\\s\\S]*?loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i')
       ];
       
       for (const pattern of loadingUsagePatterns) {

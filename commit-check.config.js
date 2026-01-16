@@ -99,6 +99,13 @@ module.exports = {
 
   // 全局配置
   global: {
+    // 智普AI API Key（可选，优先使用环境变量 ZHIPUAI_API_KEY）
+    apiKey: '9594b4c3e98c48199b88c0c03313a05e.khRRy27VW6zxo3Dt',
+    
+    // 智普AI 模型配置（可选，默认使用 glm-4-flashx）
+    // 支持的模型：glm-4-flashx, glm-4-flashx-250414, glm-4v-flash, glm-4-air
+    // model: 'glm-4-flashx',
+    
     // 需要检查的文件后缀
     fileExtensions: ['.html', '.js', '.ts', '.vue', '.jsx', '.tsx'],
     // 忽略的文件/目录（支持 glob 模式）

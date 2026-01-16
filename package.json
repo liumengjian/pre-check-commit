@@ -1,15 +1,18 @@
 {
   "name": "prina-pre-commit-check",
   "version": "1.0.5-beta.1",
-  "description": "Git pre-commit hook for frontend code quality checks",
+  "description": "Git pre-commit hook for frontend code quality checks using ZhipuAI API",
   "main": "commit-check-core.js",
   "bin": {
     "pre-commit-check": "bin/pre-commit-check.js",
     "pre-commit-check-diagnose": "bin/diagnose.js",
-    "pre-commit-check-init": "bin/init.js"
+    "pre-commit-check-init": "bin/init.js",
+    "pre-commit-check-set-api-key": "bin/set-api-key.js",
+    "pre-commit-check-get-api-key": "bin/get-api-key.js"
   },
   "files": [
     "bin",
+    "lib",
     "commit-check-core.js",
     "commit-check.config.js",
     "lint-staged.config.js",
@@ -19,7 +22,12 @@
   "scripts": {
     "prepare": "node bin/install.js",
     "test": "node test/test-runner.js",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "check": "node bin/pre-commit-check.js",
+    "set-api-key": "node bin/set-api-key.js",
+    "get-api-key": "node bin/get-api-key.js",
+    "init": "node bin/init.js",
+    "diagnose": "node bin/diagnose.js"
   },
   "keywords": [
     "pre-commit",
@@ -32,11 +40,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@babel/parser": "^7.23.0",
-    "@babel/traverse": "^7.23.0",
-    "@babel/types": "^7.23.0",
-    "chalk": "^4.1.2",
-    "glob": "^10.3.10"
+    "axios": "^1.6.0",
+    "chalk": "^4.1.2"
   },
   "devDependencies": {
     "husky": "^8.0.3",

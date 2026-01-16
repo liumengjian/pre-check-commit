@@ -159,6 +159,275 @@ function parseHTMLFile(content) {
 }
 
 /**
+ * AST工具函数：安全地检查代码模式，避免匹配到注释、字符串等
+ */
+const ASTUtils = {
+  /**
+   * 移除代码中的注释和字符串，返回纯代码文本
+   */
+  removeCommentsAndStrings(code) {
+    let result = '';
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let inTemplate = false;
+    let inSingleComment = false;
+    let inMultiComment = false;
+    let i = 0;
+    
+    while (i < code.length) {
+      const char = code[i];
+      const prevChar = i > 0 ? code[i - 1] : '';
+      const nextChar = i < code.length - 1 ? code[i + 1] : '';
+      
+      // 处理字符串
+      if (!inSingleComment && !inMultiComment) {
+        if (char === "'" && prevChar !== '\\' && !inDoubleQuote && !inTemplate) {
+          inSingleQuote = !inSingleQuote;
+          result += ' '; // 替换引号为空格
+          i++;
+          continue;
+        } else if (char === '"' && prevChar !== '\\' && !inSingleQuote && !inTemplate) {
+          inDoubleQuote = !inDoubleQuote;
+          result += ' '; // 替换引号为空格
+          i++;
+          continue;
+        } else if (char === '`' && prevChar !== '\\' && !inSingleQuote && !inDoubleQuote) {
+          inTemplate = !inTemplate;
+          result += ' '; // 替换反引号为空格
+          i++;
+          continue;
+        }
+      }
+      
+      // 处理注释
+      if (!inSingleQuote && !inDoubleQuote && !inTemplate) {
+        if (char === '/' && nextChar === '/' && !inMultiComment) {
+          inSingleComment = true;
+          result += ' '; // 替换注释开始为空格
+          i++;
+          continue;
+        } else if (char === '/' && nextChar === '*' && !inSingleComment) {
+          inMultiComment = true;
+          result += ' '; // 替换注释开始为空格
+          i += 2; // 跳过 /*
+          continue;
+        } else if (char === '*' && nextChar === '/' && inMultiComment) {
+          inMultiComment = false;
+          result += ' '; // 替换注释结束为空格
+          i += 2; // 跳过 */
+          continue;
+        } else if (char === '\n' && inSingleComment) {
+          inSingleComment = false;
+          result += '\n';
+          i++;
+          continue;
+        }
+      }
+      
+      // 如果在注释或字符串中，替换为空格
+      if (inSingleComment || inMultiComment || inSingleQuote || inDoubleQuote || inTemplate) {
+        result += ' ';
+      } else {
+        result += char;
+      }
+      
+      i++;
+    }
+    
+    return result;
+  },
+
+  /**
+   * 获取方法名（辅助函数）
+   */
+  getMethodName(callee) {
+    if (t.isIdentifier(callee)) {
+      return callee.name;
+    } else if (t.isMemberExpression(callee)) {
+      const object = this.getMethodName(callee.object);
+      const property = this.getMethodName(callee.property);
+      return `${object}.${property}`;
+    } else if (t.isCallExpression(callee)) {
+      return this.getMethodName(callee.callee) + '()';
+    }
+    return '';
+  },
+
+  /**
+   * 使用AST检查代码中是否包含某个模式（避免匹配注释和字符串）
+   */
+  checkPatternInAST(ast, pattern) {
+    if (!ast) return false;
+    
+    const self = this;
+    let found = false;
+    traverse(ast, {
+      // 检查标识符
+      Identifier(path) {
+        if (pattern.test(path.node.name)) {
+          found = true;
+          path.stop();
+        }
+      },
+      // 检查字符串字面量（但排除注释）
+      StringLiteral(path) {
+        if (pattern.test(path.node.value)) {
+          found = true;
+          path.stop();
+        }
+      },
+      // 检查模板字面量
+      TemplateLiteral(path) {
+        path.node.quasis.forEach(quasi => {
+          if (pattern.test(quasi.value.raw)) {
+            found = true;
+            path.stop();
+          }
+        });
+      },
+      // 检查成员表达式（如 .map(, .length）
+      MemberExpression(path) {
+        if (t.isIdentifier(path.node.property)) {
+          if (pattern.test(path.node.property.name)) {
+            found = true;
+            path.stop();
+          }
+        }
+      },
+      // 检查调用表达式
+      CallExpression(path) {
+        const methodName = self.getMethodName(path.node.callee);
+        if (pattern.test(methodName)) {
+          found = true;
+          path.stop();
+        }
+      }
+    });
+    
+    return found;
+  },
+
+  /**
+   * 检查代码中是否包含某个关键词（使用AST，避免匹配注释和字符串）
+   */
+  hasKeyword(ast, content, keywords) {
+    if (!ast && !content) return false;
+    
+    // 如果有关键词数组，检查每个关键词
+    if (Array.isArray(keywords)) {
+      return keywords.some(keyword => this.hasKeyword(ast, content, keyword));
+    }
+    
+    const keyword = keywords;
+    const pattern = new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    
+    // 优先使用AST检查（排除字符串字面量）
+    if (ast) {
+      const self = this;
+      let found = false;
+      traverse(ast, {
+        // 检查标识符（变量名、函数名等）
+        Identifier(path) {
+          if (pattern.test(path.node.name)) {
+            found = true;
+            path.stop();
+          }
+        },
+        // 检查成员表达式的属性名（如 .map, .length）
+        MemberExpression(path) {
+          if (t.isIdentifier(path.node.property)) {
+            if (pattern.test(path.node.property.name)) {
+              found = true;
+              path.stop();
+            }
+          }
+        },
+        // 检查调用表达式的方法名
+        CallExpression(path) {
+          const methodName = self.getMethodName(path.node.callee);
+          if (pattern.test(methodName)) {
+            found = true;
+            path.stop();
+          }
+        },
+        // 跳过字符串字面量和模板字面量（避免匹配字符串内容）
+        StringLiteral(path) {
+          // 不检查字符串内容
+        },
+        TemplateLiteral(path) {
+          // 不检查模板字符串内容
+        }
+      });
+      if (found) return true;
+    }
+    
+    // 回退到字符串检查（但移除注释和字符串）
+    if (content) {
+      const cleanContent = this.removeCommentsAndStrings(content);
+      return pattern.test(cleanContent);
+    }
+    
+    return false;
+  },
+
+  /**
+   * 检查代码中是否包含某个方法调用（使用AST）
+   */
+  hasMethodCall(ast, methodName) {
+    if (!ast) return false;
+    
+    const self = this;
+    let found = false;
+    const methodNameLower = methodName.toLowerCase();
+    
+    traverse(ast, {
+      CallExpression(path) {
+        const method = self.getMethodName(path.node.callee);
+        if (method.toLowerCase().includes(methodNameLower)) {
+          found = true;
+          path.stop();
+        }
+      }
+    });
+    
+    return found;
+  },
+
+  /**
+   * 检查代码中是否包含某个JSX组件（使用AST）
+   */
+  hasJSXComponent(ast, componentName) {
+    if (!ast) return false;
+    
+    let found = false;
+    
+    traverse(ast, {
+      JSXOpeningElement(path) {
+        const elementName = path.node.name;
+        let name = '';
+        
+        if (t.isJSXIdentifier(elementName)) {
+          name = elementName.name;
+        } else if (t.isJSXMemberExpression(elementName)) {
+          const object = elementName.object;
+          const property = elementName.property;
+          if (t.isJSXIdentifier(object) && t.isJSXIdentifier(property)) {
+            name = `${object.name}.${property.name}`;
+          }
+        }
+        
+        if (name === componentName || name.toLowerCase() === componentName.toLowerCase()) {
+          found = true;
+          path.stop();
+        }
+      }
+    });
+    
+    return found;
+  }
+};
+
+/**
  * 检查规则1：新增按钮接口调用防重复提交检查
  */
 function checkRule1(filePath, parsed, diff) {
@@ -169,20 +438,35 @@ function checkRule1(filePath, parsed, diff) {
 
   // 检查是否在 diff 中新增了按钮，或者检查所有按钮（如果文件是新增的）
   const isNewFile = !diff || !diff.includes('---') || (diff && diff.split('\n').filter(l => l.startsWith('+++')).length > 0);
-  const hasNewButton = diff && diff.includes('+') && (
-    diff.includes('button') || 
-    diff.includes('Button') || 
-    diff.includes('@click') || 
-    diff.includes('onClick') ||
-    diff.includes('onOk') ||
-    diff.includes('onConfirm') ||
-    diff.includes('onFinish') ||
-    diff.includes('htmlType') ||
-    diff.includes('Modal') ||
-    diff.includes('Drawer') ||
-    diff.includes('Popconfirm') ||
-    diff.includes('Form')
-  );
+  
+  // 使用AST检查是否有按钮相关代码（避免匹配注释和字符串）
+  let hasNewButton = false;
+  if (diff && diff.includes('+')) {
+    // 从diff中提取新增的代码行
+    const diffLines = diff.split('\n');
+    const addedCode = diffLines
+      .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+      .map(line => line.substring(1))
+      .join('\n');
+    
+    // 移除注释和字符串后检查
+    const cleanDiff = ASTUtils.removeCommentsAndStrings(addedCode);
+    const buttonKeywords = ['button', 'Button', '@click', 'onClick', 'onOk', 'onConfirm', 'onFinish', 'htmlType', 'Modal', 'Drawer', 'Popconfirm', 'Form'];
+    hasNewButton = buttonKeywords.some(keyword => {
+      const pattern = new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      return pattern.test(cleanDiff);
+    });
+    
+    // 如果AST可用，也使用AST检查
+    if (ast && !hasNewButton) {
+      hasNewButton = ASTUtils.hasJSXComponent(ast, 'Button') ||
+                     ASTUtils.hasJSXComponent(ast, 'Modal') ||
+                     ASTUtils.hasJSXComponent(ast, 'Drawer') ||
+                     ASTUtils.hasJSXComponent(ast, 'Popconfirm') ||
+                     ASTUtils.hasJSXComponent(ast, 'Form') ||
+                     ASTUtils.hasKeyword(ast, content, ['onClick', 'onOk', 'onConfirm', 'onFinish', 'htmlType']);
+    }
+  }
 
   // 如果既不是新文件，也没有新增按钮，则跳过检查
   if (!isNewFile && !hasNewButton) {
@@ -379,12 +663,16 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
     return;
   }
 
+  // 获取AST（如果可用）
+  const ast = parsed.ast || null;
+
   let hasApiCall = false;
   let hasProtection = false;
   // 用于检查问题1和问题2的变量
   let definedButNotUsed = false;
   let usedWrongLoading = false;
   let correctLoadingName = null;
+  let foundModalOrDrawerWithoutLoading = false; // 标记是否找到 Modal/Drawer/Form 但没有 loading（在函数开始时初始化）
 
   // 检查函数开始处是否有状态锁检查（如 if (isSubmitting) return;）
   const funcBody = path.node.body;
@@ -773,34 +1061,282 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
               // 如果找到了loading的设置和重置，还需要检查是否在JSX中实际使用了这个loading
               // 只有在JSX中实际使用了loading时，才认为有防重复提交保护
               if (foundLoadingReset && loadingVarBefore) {
-                // 检查loading是否在JSX中使用
-                const fullContent = parsed.content || '';
-                const contentWithoutComments = fullContent
-                  .replace(/\/\*[\s\S]*?\*\//g, '')
-                  .replace(/\/\/.*$/gm, '');
-                
-                const escapedVarName = loadingVarBefore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const loadingUsagePatterns = [
-                  new RegExp(`confirmLoading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
-                  new RegExp(`loading\\s*:\\s*${escapedVarName}\\b`, 'i'), // 匹配 loading: loading (注意：需要单词边界)
-                  new RegExp(`loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
-                  new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*:\\s*${escapedVarName}\\b[^}]*\\}`, 'i'), // 匹配 okButtonProps={{ loading: loading }}
-                  new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i'),
-                  // 检查 Button 组件的 loading 属性（只要Button有loading属性，且值是正确的loading变量即可，不关心位置）
-                  new RegExp(`<Button[\\s\\S]*?loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i')
-                ];
-                
+                // 使用AST检查loading是否在JSX中实际使用（避免匹配注释）
                 let foundInJSX = false;
-                for (const pattern of loadingUsagePatterns) {
-                  if (pattern.test(contentWithoutComments)) {
-                    foundInJSX = true;
-                    break;
+                
+                // 优先使用AST检查
+                if (ast) {
+                  traverse(ast, {
+                    JSXOpeningElement(jsxPath) {
+                      const elementName = jsxPath.node.name;
+                      let componentName = '';
+                      
+                      if (t.isJSXIdentifier(elementName)) {
+                        componentName = elementName.name;
+                      } else if (t.isJSXMemberExpression(elementName)) {
+                        const object = elementName.object;
+                        const property = elementName.property;
+                        if (t.isJSXIdentifier(object) && t.isJSXIdentifier(property)) {
+                          componentName = `${object.name}.${property.name}`;
+                        }
+                      }
+                      
+                      // 检查Button组件
+                      if (componentName === 'Button') {
+                        const attributes = jsxPath.node.attributes || [];
+                        for (const attr of attributes) {
+                          if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && attr.name.name === 'loading') {
+                            // 检查loading属性的值
+                            if (attr.value) {
+                              if (t.isJSXExpressionContainer(attr.value) && t.isIdentifier(attr.value.expression)) {
+                                if (attr.value.expression.name === loadingVarBefore) {
+                                  foundInJSX = true;
+                                  jsxPath.stop();
+                                  return;
+                                }
+                              } else if (t.isJSXExpressionContainer(attr.value) && t.isMemberExpression(attr.value.expression)) {
+                                // 支持 this.loading 或 props.loading
+                                const memberExpr = attr.value.expression;
+                                if (t.isIdentifier(memberExpr.property) && memberExpr.property.name === loadingVarBefore) {
+                                  foundInJSX = true;
+                                  jsxPath.stop();
+                                  return;
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                      
+                      // 检查Modal组件的confirmLoading
+                      if (componentName === 'Modal' || componentName === 'Drawer') {
+                        const attributes = jsxPath.node.attributes || [];
+                        for (const attr of attributes) {
+                          if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && 
+                              (attr.name.name === 'confirmLoading' || attr.name.name === 'loading')) {
+                            if (attr.value) {
+                              if (t.isJSXExpressionContainer(attr.value) && t.isIdentifier(attr.value.expression)) {
+                                if (attr.value.expression.name === loadingVarBefore) {
+                                  foundInJSX = true;
+                                  jsxPath.stop();
+                                  return;
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  });
+                }
+                
+                // 如果AST检查没有找到，回退到正则匹配（但移除注释）
+                if (!foundInJSX) {
+                  const fullContent = parsed.content || '';
+                  const contentWithoutComments = ASTUtils.removeCommentsAndStrings(fullContent);
+                  
+                  const escapedVarName = loadingVarBefore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  const loadingUsagePatterns = [
+                    new RegExp(`confirmLoading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`loading\\s*:\\s*${escapedVarName}\\b`, 'i'), // 匹配 loading: loading (注意：需要单词边界)
+                    new RegExp(`loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i'),
+                    new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*:\\s*${escapedVarName}\\b[^}]*\\}`, 'i'), // 匹配 okButtonProps={{ loading: loading }}
+                    new RegExp(`okButtonProps\\s*=\\s*\\{[^}]*loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}[^}]*\\}`, 'i'),
+                    // 检查 Button 组件的 loading 属性（只要Button有loading属性，且值是正确的loading变量即可，不关心位置）
+                    // 注意：这里要排除注释中的loading，所以使用contentWithoutComments
+                    new RegExp(`<Button[\\s\\S]*?loading\\s*=\\s*\\{[^}]*\\b${escapedVarName}\\b[^}]*\\}`, 'i')
+                  ];
+                  
+                  for (const pattern of loadingUsagePatterns) {
+                    if (pattern.test(contentWithoutComments)) {
+                      foundInJSX = true;
+                      break;
+                    }
                   }
                 }
                 
                 // 只有在JSX中实际使用了loading时，才设置hasProtection
+                // 但是，如果Button有htmlType="submit"且Form有onFinish，需要特别检查Button的loading
                 if (foundInJSX) {
-                  hasProtection = true;
+                  // 即使找到了loading的使用，也要检查是否是Form的onFinish情况
+                  // 如果是Form的onFinish，且Button有htmlType="submit"，必须确保Button有loading
+                  let needCheckSubmitButton = false;
+                  if (ast) {
+                    traverse(ast, {
+                      JSXOpeningElement(jsxPath) {
+                        const elementName = jsxPath.node.name;
+                        let componentName = '';
+                        
+                        if (t.isJSXIdentifier(elementName)) {
+                          componentName = elementName.name;
+                        }
+                        
+                        // 检查Form组件是否有onFinish
+                        if (componentName === 'Form') {
+                          const attributes = jsxPath.node.attributes || [];
+                          for (const attr of attributes) {
+                            if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && attr.name.name === 'onFinish') {
+                              if (attr.value && t.isJSXExpressionContainer(attr.value)) {
+                                const expr = attr.value.expression;
+                                if (t.isIdentifier(expr)) {
+                                  const formOnFinishName = expr.name;
+                                  const currentHandlerName = handler.name.replace(/['"()]/g, '').trim();
+                                  if (formOnFinishName === currentHandlerName || 
+                                      currentHandlerName.toLowerCase() === formOnFinishName.toLowerCase()) {
+                                    needCheckSubmitButton = true;
+                                  }
+                                }
+                              }
+                              break;
+                            }
+                          }
+                        }
+                      }
+                    });
+                  }
+                  
+                  // 如果需要检查submit按钮，验证Button是否有loading
+                  if (needCheckSubmitButton && ast) {
+                    let submitButtonHasHtmlTypeSubmit = false;
+                    let submitButtonHasLoading = false;
+                    let submitButtonInForm = false;
+                    
+                    traverse(ast, {
+                      JSXOpeningElement(jsxPath) {
+                        const elementName = jsxPath.node.name;
+                        let componentName = '';
+                        
+                        if (t.isJSXIdentifier(elementName)) {
+                          componentName = elementName.name;
+                        }
+                        
+                        if (componentName === 'Button') {
+                          let parent = jsxPath.parentPath;
+                          let inForm = false;
+                          while (parent) {
+                            if (parent.isJSXOpeningElement()) {
+                              const parentName = parent.node.name;
+                              if (t.isJSXIdentifier(parentName) && parentName.name === 'Form') {
+                                inForm = true;
+                                submitButtonInForm = true;
+                                break;
+                              }
+                            }
+                            if (parent.isJSXElement()) {
+                              const parentElement = parent.node.openingElement;
+                              if (parentElement && t.isJSXIdentifier(parentElement.name) && parentElement.name.name === 'Form') {
+                                inForm = true;
+                                submitButtonInForm = true;
+                                break;
+                              }
+                            }
+                            parent = parent.parentPath;
+                            if (!parent) break;
+                          }
+                          
+                          if (inForm) {
+                            const attributes = jsxPath.node.attributes || [];
+                            for (const attr of attributes) {
+                              if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
+                                if (attr.name.name === 'htmlType') {
+                                  if (attr.value && t.isStringLiteral(attr.value) && attr.value.value === 'submit') {
+                                    submitButtonHasHtmlTypeSubmit = true;
+                                  }
+                                }
+                                if (attr.name.name === 'loading') {
+                                  submitButtonHasLoading = true;
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    });
+                    
+                    // 如果Button有htmlType="submit"但没有loading，应该报错
+                    if (submitButtonHasHtmlTypeSubmit && !submitButtonHasLoading) {
+                      foundInJSX = false; // 标记为没有找到loading，这样会触发错误
+                      definedButNotUsed = true;
+                      foundModalOrDrawerWithoutLoading = true;
+                    }
+                  }
+                  
+                  if (foundInJSX) {
+                    hasProtection = true;
+                  }
+                } else {
+                  // 如果定义了loading但没有在JSX中使用，标记为definedButNotUsed
+                  // 但需要检查是否是Form的onFinish情况，如果是，需要特别检查Button的htmlType="submit"
+                  if (loadingVarBefore) {
+                    // 检查是否是Form的onFinish情况
+                    let isFormOnFinish = false;
+                    let formButtonHasHtmlTypeSubmit = false;
+                    let formButtonHasLoading = false;
+                    
+                    if (ast) {
+                      traverse(ast, {
+                        JSXOpeningElement(jsxPath) {
+                          const elementName = jsxPath.node.name;
+                          let componentName = '';
+                          
+                          if (t.isJSXIdentifier(elementName)) {
+                            componentName = elementName.name;
+                          }
+                          
+                          // 检查Form组件是否有onFinish
+                          if (componentName === 'Form') {
+                            const attributes = jsxPath.node.attributes || [];
+                            for (const attr of attributes) {
+                              if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && attr.name.name === 'onFinish') {
+                                isFormOnFinish = true;
+                                break;
+                              }
+                            }
+                          }
+                          
+                          // 检查Form内的Button是否有htmlType="submit"和loading
+                          if (componentName === 'Button') {
+                            let inForm = false;
+                            let parent = jsxPath.parentPath;
+                            while (parent) {
+                              if (parent.isJSXOpeningElement()) {
+                                const parentName = parent.node.name;
+                                if (t.isJSXIdentifier(parentName) && parentName.name === 'Form') {
+                                  inForm = true;
+                                  break;
+                                }
+                              }
+                              parent = parent.parentPath;
+                            }
+                            
+                            if (inForm) {
+                              const attributes = jsxPath.node.attributes || [];
+                              for (const attr of attributes) {
+                                if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
+                                  if (attr.name.name === 'htmlType') {
+                                    if (attr.value && t.isStringLiteral(attr.value) && attr.value.value === 'submit') {
+                                      formButtonHasHtmlTypeSubmit = true;
+                                    }
+                                  }
+                                  if (attr.name.name === 'loading') {
+                                    formButtonHasLoading = true;
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      });
+                    }
+                    
+                    // 如果是Form的onFinish，且Button有htmlType="submit"，但没有loading，应该报错
+                    if (isFormOnFinish && formButtonHasHtmlTypeSubmit && !formButtonHasLoading) {
+                      definedButNotUsed = true;
+                    } else if (!foundInJSX) {
+                      // 其他情况，如果定义了loading但没有使用，也标记为definedButNotUsed
+                      definedButNotUsed = true;
+                    }
+                  }
                 }
               }
             }
@@ -828,12 +1364,122 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
   // 同时检查：1. 定义了loading但没有使用；2. 使用了其他接口的loading
   // 注意：只有在没有找到其他保护机制时，才检查definedButNotUsed和usedWrongLoading
   // 如果在上面的path.traverse中已经设置了hasProtection = true，说明已经找到了有效的保护机制，就不需要再检查这些问题了
+  
+  // 特别检查：当Button有htmlType="submit"时，如果Form有onFinish且onFinish中调用了接口，Button必须有loading
+  // 只有当onFinish里没有调用接口，或者Form没有绑定onFinish方法，才不用loading
+  // 注意：这个检查应该在检查hasProtection之前进行，因为即使hasProtection为false，如果Button有htmlType="submit"且Form有onFinish，也应该检查
+  // 这个检查必须在path.traverse之后执行，因为hasApiCall是在path.traverse内部设置的
+  if (hasApiCall && parsed.ast) {
+    const ast = parsed.ast;
+    let formHasOnFinish = false;
+    let formOnFinishHandlerName = null;
+    let submitButtonHasHtmlTypeSubmit = false;
+    let submitButtonHasLoading = false;
+    let submitButtonInForm = false;
+    
+    // 检查Form是否有onFinish，以及Button是否有htmlType="submit"
+    traverse(ast, {
+      JSXOpeningElement(jsxPath) {
+        const elementName = jsxPath.node.name;
+        let componentName = '';
+        
+        if (t.isJSXIdentifier(elementName)) {
+          componentName = elementName.name;
+        }
+        
+        // 检查Form组件是否有onFinish
+        if (componentName === 'Form') {
+          const attributes = jsxPath.node.attributes || [];
+          for (const attr of attributes) {
+            if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && attr.name.name === 'onFinish') {
+              if (attr.value && t.isJSXExpressionContainer(attr.value)) {
+                const expr = attr.value.expression;
+                if (t.isIdentifier(expr)) {
+                  formHasOnFinish = true;
+                  formOnFinishHandlerName = expr.name;
+                }
+              }
+              break;
+            }
+          }
+        }
+        
+        // 检查Form内的Button是否有htmlType="submit"和loading
+        if (componentName === 'Button') {
+          // 检查这个Button是否在Form内（需要向上查找所有父节点，包括JSXElement）
+          let parent = jsxPath.parentPath;
+          let inForm = false;
+          while (parent) {
+            if (parent.isJSXOpeningElement()) {
+              const parentName = parent.node.name;
+              if (t.isJSXIdentifier(parentName) && parentName.name === 'Form') {
+                inForm = true;
+                submitButtonInForm = true;
+                break;
+              }
+            }
+            // 也需要检查JSXElement的父节点
+            if (parent.isJSXElement()) {
+              const parentElement = parent.node.openingElement;
+              if (parentElement && t.isJSXIdentifier(parentElement.name) && parentElement.name.name === 'Form') {
+                inForm = true;
+                submitButtonInForm = true;
+                break;
+              }
+            }
+            parent = parent.parentPath;
+            if (!parent) break;
+          }
+          
+          if (inForm) {
+            const attributes = jsxPath.node.attributes || [];
+            for (const attr of attributes) {
+              if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
+                if (attr.name.name === 'htmlType') {
+                  if (attr.value && t.isStringLiteral(attr.value) && attr.value.value === 'submit') {
+                    submitButtonHasHtmlTypeSubmit = true;
+                  }
+                }
+                if (attr.name.name === 'loading') {
+                  submitButtonHasLoading = true;
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    
+    // 如果Form有onFinish，且Button有htmlType="submit"，且onFinish中调用了接口，但Button没有loading，应该报错
+    if (formHasOnFinish && submitButtonHasHtmlTypeSubmit && !submitButtonHasLoading) {
+      // 检查onFinish方法中是否调用了接口
+      // 如果hasApiCall为true，说明当前检查的函数（onFinish）中调用了接口
+      const currentHandlerName = handler.name.replace(/['"()]/g, '').trim();
+      const formOnFinishName = formOnFinishHandlerName ? formOnFinishHandlerName.trim() : '';
+      
+      // 匹配handler名称（支持多种格式：onFinish, onFinish(), "onFinish"等）
+      const handlerNameMatch = currentHandlerName === formOnFinishName ||
+          currentHandlerName.toLowerCase() === formOnFinishName.toLowerCase() ||
+          currentHandlerName.includes(formOnFinishName) ||
+          formOnFinishName.includes(currentHandlerName) ||
+          currentHandlerName.replace(/['"()]/g, '') === formOnFinishName.replace(/['"()]/g, '');
+      
+      if (handlerNameMatch) {
+        // onFinish方法中调用了接口，但Button没有loading，应该报错
+        // 强制设置这些标志，确保错误被报告
+        definedButNotUsed = true;
+        foundModalOrDrawerWithoutLoading = true;
+        hasProtection = false; // 确保hasProtection为false，这样会在最后报错
+      }
+    }
+  }
+  
   if (!hasProtection && hasApiCall) {
     // 查找函数中的所有接口调用
     let foundDeclareRequestLoading = false;
-    let foundModalOrDrawerWithoutLoading = false; // 标记是否找到 Modal/Drawer/Form 但没有 loading
-    let usedWrongLoading = false; // 标记是否使用了错误的loading
-    let correctLoadingName = null; // 正确的loading名称
+    // 注意：foundModalOrDrawerWithoutLoading 已经在上面检查htmlType="submit"时可能设置了，不要重新声明
+    // usedWrongLoading 和 correctLoadingName 也可能在上面设置了，不要重新声明
+    // 如果上面没有设置，这里保持初始值false/null
     
     // 先检查是否有 Modal/Drawer/Form 但没有 loading（在遍历接口调用之前）
     const handlerName = handler.name.replace(/['"()]/g, '').trim();
@@ -1053,28 +1699,110 @@ function checkHandlerForRule1(path, handler, errors, filePath, parsed) {
               }
               
               // 检查 Form 是否使用了错误的loading
-              const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
-              if (formMatch) {
-                const formContent = formMatch[0];
-                const hasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapedHandlerName}`, 'i').test(formContent);
-                if (hasOnFinish) {
-                  const formLoadingMatch = formContent.match(/loading\s*=\s*\{([^}]+)\}/i);
-                  // 检查 Form 内的 Button 是否有 loading 属性（只要Button有loading属性即可，不关心位置）
-                  const submitButtonLoadingMatch = formContent.match(/<Button[\\s\\S]*?loading\s*=\s*\{([^}]+)\}/i);
-                  
-                  if (formLoadingMatch || submitButtonLoadingMatch) {
-                    const loadingValue = (formLoadingMatch ? formLoadingMatch[1] : submitButtonLoadingMatch[1]).trim();
-                    if (loadingValue === declareRequestInfo.loadingName) {
-                      foundDeclareRequestLoading = true;
-                      hasProtection = true;
-                      apiCallPath.stop();
-                      return;
-                    } else {
-                      usedWrongLoading = true;
+              // 使用AST检查，避免匹配注释
+              const handlerNameForCheck = handler.name.replace(/['"()]/g, '').trim();
+              let formHasOnFinish = false;
+              let formButtonHasLoading = false;
+              let formButtonLoadingValue = null;
+              
+              if (ast) {
+                traverse(ast, {
+                  JSXOpeningElement(jsxPath) {
+                    const elementName = jsxPath.node.name;
+                    let componentName = '';
+                    
+                    if (t.isJSXIdentifier(elementName)) {
+                      componentName = elementName.name;
+                    } else if (t.isJSXMemberExpression(elementName)) {
+                      const object = elementName.object;
+                      const property = elementName.property;
+                      if (t.isJSXIdentifier(object) && t.isJSXIdentifier(property)) {
+                        componentName = `${object.name}.${property.name}`;
+                      }
                     }
-                  } else {
-                    foundModalOrDrawerWithoutLoading = true;
+                    
+                    // 检查Form组件
+                    if (componentName === 'Form') {
+                      const attributes = jsxPath.node.attributes || [];
+                      for (const attr of attributes) {
+                        if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && attr.name.name === 'onFinish') {
+                          if (attr.value && t.isJSXExpressionContainer(attr.value)) {
+                            const expr = attr.value.expression;
+                            if (t.isIdentifier(expr) && (expr.name === handlerNameForCheck || expr.name.includes(handlerNameForCheck) || handlerNameForCheck.includes(expr.name))) {
+                              formHasOnFinish = true;
+                            }
+                          }
+                        }
+                      }
+                    }
+                    
+                    // 检查Form内的Button组件
+                    if (componentName === 'Button') {
+                      // 检查这个Button是否在Form内（通过查找父节点）
+                      let parent = jsxPath.parentPath;
+                      let inForm = false;
+                      while (parent) {
+                        if (parent.isJSXOpeningElement()) {
+                          const parentName = parent.node.name;
+                          if (t.isJSXIdentifier(parentName) && parentName.name === 'Form') {
+                            inForm = true;
+                            break;
+                          }
+                        }
+                        parent = parent.parentPath;
+                      }
+                      
+                      if (inForm) {
+                        const attributes = jsxPath.node.attributes || [];
+                        for (const attr of attributes) {
+                          if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name) && attr.name.name === 'loading') {
+                            formButtonHasLoading = true;
+                            if (attr.value && t.isJSXExpressionContainer(attr.value)) {
+                              const expr = attr.value.expression;
+                              if (t.isIdentifier(expr)) {
+                                formButtonLoadingValue = expr.name;
+                              }
+                            }
+                            break;
+                          }
+                        }
+                      }
+                    }
                   }
+                });
+              }
+              
+              // 如果AST检查没有找到，回退到正则匹配（但移除注释）
+              if (!formHasOnFinish) {
+                const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
+                if (formMatch) {
+                  const formContent = formMatch[0];
+                  formHasOnFinish = new RegExp(`onFinish[\\s\\S]*?${escapedHandlerName}`, 'i').test(formContent);
+                }
+              }
+              
+              if (!formButtonHasLoading && formHasOnFinish) {
+                const formMatch = contentWithoutComments.match(new RegExp(`<Form[\\s\\S]*?</Form>`, 'i'));
+                if (formMatch) {
+                  const formContent = formMatch[0];
+                  const submitButtonLoadingMatch = formContent.match(/<Button[\\s\\S]*?loading\s*=\s*\{([^}]+)\}/i);
+                  if (submitButtonLoadingMatch) {
+                    formButtonHasLoading = true;
+                    formButtonLoadingValue = submitButtonLoadingMatch[1].trim();
+                  }
+                }
+              }
+              
+              if (formHasOnFinish) {
+                if (formButtonHasLoading && formButtonLoadingValue === declareRequestInfo.loadingName) {
+                  foundDeclareRequestLoading = true;
+                  hasProtection = true;
+                  apiCallPath.stop();
+                  return;
+                } else if (formButtonHasLoading) {
+                  usedWrongLoading = true;
+                } else {
+                  foundModalOrDrawerWithoutLoading = true;
                 }
               }
               
@@ -1160,20 +1888,24 @@ function checkRule2(filePath, parsed, diff) {
     diff.includes('useEffect') || diff.includes('componentDidMount'));
 
   // 检查是否有useEffect（即使不是新增文件，只要有useEffect也检查）
-  const hasUseEffectInContent = content.includes('useEffect');
+  // 使用AST检查，避免匹配注释和字符串
+  const hasUseEffectInContent = ASTUtils.hasMethodCall(ast, 'useEffect') || 
+                                 ASTUtils.hasKeyword(ast, content, 'useEffect');
 
   if (!isNewFile && !hasInitLogic && !hasUseEffectInContent) {
     return null;
   }
 
   // 检查是否是列表页或详情页（可选，如果不是列表页/详情页，只要有useEffect中的接口调用也检查）
+  // 使用AST检查，避免匹配注释和字符串
   const isListPage = (template && (template.includes('el-table') || template.includes('<Table'))) ||
-    content.includes('.map(') || content.includes('v-for');
-  const isDetailPage = content.includes('getDetail') || content.includes('fetchDetail') ||
-    content.includes('queryDetail') || content.includes('详情');
+                     ASTUtils.hasMethodCall(ast, '.map') ||
+                     ASTUtils.hasKeyword(ast, content, ['.map(', 'v-for']);
+  
+  const isDetailPage = ASTUtils.hasKeyword(ast, content, ['getDetail', 'fetchDetail', 'queryDetail', '详情']);
 
   // 检查是否有useEffect
-  const hasUseEffect = content.includes('useEffect');
+  const hasUseEffect = ASTUtils.hasMethodCall(ast, 'useEffect') || ASTUtils.hasKeyword(ast, content, 'useEffect');
 
   // 如果不是列表页/详情页，也没有useEffect，则跳过检查
   if (!isListPage && !isDetailPage && !hasUseEffect) {
@@ -1675,13 +2407,39 @@ function checkRule4(filePath, parsed, diff) {
   }
 
   // 检查是否有空状态处理
+  // 使用AST检查，避免匹配注释和字符串
   const emptyComponents = config.rule4.customKeywords.emptyComponents || ['Empty', 'NoData', 'EmptyTip'];
-  const hasEmptyState = (template && (template.includes('暂无数据') || template.includes('暂无'))) ||
-    content.includes('暂无数据') || content.includes('暂无') ||
-    emptyComponents.some(comp => (template && template.includes(comp)) || content.includes(comp)) ||
-    (template && (template.includes('v-if="!') || template.includes('v-if="list.length === 0'))) ||
-    content.includes('length === 0') || content.includes('!list') ||
-    content.includes('list.length === 0');
+  
+  let hasEmptyState = false;
+  
+  // 检查模板中的空状态文本
+  if (template) {
+    const cleanTemplate = ASTUtils.removeCommentsAndStrings(template);
+    hasEmptyState = cleanTemplate.includes('暂无数据') || 
+                    cleanTemplate.includes('暂无') ||
+                    cleanTemplate.includes('v-if="!') ||
+                    cleanTemplate.includes('v-if="list.length === 0');
+  }
+  
+  // 检查代码中的空状态
+  if (!hasEmptyState) {
+    // 检查空状态文本
+    hasEmptyState = ASTUtils.hasKeyword(ast, content, ['暂无数据', '暂无']);
+    
+    // 检查空状态组件
+    if (!hasEmptyState && ast) {
+      emptyComponents.forEach(comp => {
+        if (ASTUtils.hasJSXComponent(ast, comp)) {
+          hasEmptyState = true;
+        }
+      });
+    }
+    
+    // 检查长度判断
+    if (!hasEmptyState) {
+      hasEmptyState = ASTUtils.hasKeyword(ast, content, ['length === 0', 'length == 0', '!list', 'list.length === 0']);
+    }
+  }
 
   if (!hasEmptyState) {
     const line = ast?.loc?.start.line || 1;
@@ -1753,11 +2511,75 @@ function checkRule5(filePath, parsed, diff) {
           }
         }
 
+        // 排除常见的子组件，这些组件不需要placeholder
+        // 注意：Input.TextArea, Input.Password, Input.Search 等是真正的输入组件，需要placeholder，不应该排除
+        // 只有容器组件、选项组件等子组件才需要排除
+        const excludedSubComponents = [
+          // Select 相关子组件
+          'Select.Option', 'Select.OptGroup',
+          // Input 容器组件（Input.Group 是容器，不需要placeholder）
+          // 注意：Input.TextArea, Input.Password, Input.Search 不在排除列表中，因为它们需要placeholder
+          'Input.Group',
+          // Cascader 相关子组件
+          'Cascader.Option',
+          // TreeSelect 相关子组件
+          'TreeSelect.TreeNode',
+          // Form 相关子组件
+          'Form.Item', 'Form.List', 'Form.Provider',
+          // Upload 相关子组件
+          'Upload.Dragger', 'Upload.Button',
+          // Transfer 相关子组件
+          'Transfer.List', 'Transfer.Search',
+          // Table 相关子组件（虽然不在inputComponents中，但以防万一）
+          'Table.Column', 'Table.ColumnGroup',
+          // Radio 相关子组件
+          'Radio.Group', 'Radio.Button',
+          // Checkbox 相关子组件
+          'Checkbox.Group',
+          // Menu 相关子组件
+          'Menu.Item', 'Menu.SubMenu', 'Menu.ItemGroup',
+          // Dropdown 相关子组件
+          'Dropdown.Button',
+          // Steps 相关子组件
+          'Steps.Step',
+          // Tabs 相关子组件
+          'Tabs.TabPane', 'Tabs.Tab',
+          // Collapse 相关子组件
+          'Collapse.Panel',
+          // Timeline 相关子组件
+          'Timeline.Item',
+          // Breadcrumb 相关子组件
+          'Breadcrumb.Item', 'Breadcrumb.Separator',
+          // Anchor 相关子组件
+          'Anchor.Link',
+          // Pagination 相关子组件
+          'Pagination.Item',
+          // Rate 相关子组件
+          'Rate.Character',
+          // Slider 相关子组件
+          'Slider.Marks', 'Slider.Mark',
+          // DatePicker 和 TimePicker 的 RangePicker 是独立的输入组件，需要placeholder，不在排除列表中
+        ];
+        if (excludedSubComponents.includes(componentName)) {
+          return; // 跳过子组件检查
+        }
+
         // 检查是否是配置的输入组件
         const isInputComponent = inputComponents.some(comp => {
           if (comp.includes('.')) {
+            // 对于带点的组件（如 Input.TextArea），必须精确匹配
             return comp === componentName;
           } else {
+            // 对于不带点的组件（如 Select, Input），只检查最上层组件
+            // 如果 componentName 包含点（如 Select.Option），需要进一步判断
+            if (componentName.includes('.')) {
+              // 检查是否是配置中明确允许的带点组件（如 Input.TextArea, Input.Password, Input.Search）
+              const isExplicitlyAllowed = inputComponents.some(c => c.includes('.') && c === componentName);
+              if (isExplicitlyAllowed) {
+                return true; // 是配置中允许的带点输入组件，需要检查placeholder
+              }
+              return false; // 其他带点的都是子组件，不匹配
+            }
             return comp === componentName || componentName.startsWith(comp);
           }
         });

@@ -154,9 +154,10 @@ async function runChecks() {
     return true;
   }
 
-  console.log(chalk.blue(`\n🔍 开始使用智普AI检查 ${filesToCheck.length} 个文件...\n`));
+  console.log(chalk.blue(`\n🔍 开始使用AI检查 ${filesToCheck.length} 个文件...\n`));
 
-  // 逐个文件检查
+  // 收集所有需要检查的文件信息
+  const filesToValidate = [];
   for (let i = 0; i < filesToCheck.length; i++) {
     const file = filesToCheck[i];
     
@@ -165,46 +166,48 @@ async function runChecks() {
       continue;
     }
 
-    try {
-      console.log(chalk.gray(`[${i + 1}/${filesToCheck.length}] 检查文件: ${file}`));
-      
-      const fileContent = readFileContent(file);
-      if (!fileContent) {
+    const fileContent = readFileContent(file);
+    if (!fileContent) {
         continue;
       }
 
       const diff = getFileDiff(file);
+    filesToValidate.push({
+      path: file,
+      content: fileContent,
+      diff: diff
+    });
+    
+    console.log(chalk.gray(`[${i + 1}/${filesToCheck.length}] 准备检查文件: ${file}`));
+  }
 
-      // 使用AI进行校验
-      try {
-        const errors = await validateWithAI(apiKey, file, fileContent, diff, config);
-        
-        if (errors && errors.length > 0) {
-          allErrors.push(...errors);
-          console.log(chalk.red(`  ❌ 发现 ${errors.length} 个问题`));
-        } else {
-          console.log(chalk.green(`  ✓ 通过`));
-        }
-      } catch (aiError) {
-        // 格式化错误信息
-        const errorMsg = aiError.message || String(aiError);
-        console.error(chalk.red(`  ❌ AI校验失败: ${errorMsg}`));
-        
-        // 如果AI校验失败，可以选择：
-        // 1. 阻止提交（更严格）
-        // 2. 继续检查其他文件（更宽松）
-        // 这里选择继续检查其他文件，但记录错误
-        allErrors.push({
-          rule: 0,
-          file: file,
-          line: 0,
-          message: `AI校验失败: ${errorMsg}`,
-          suggestion: '请检查网络连接和API Key配置，或查看详细错误信息'
-        });
-      }
-    } catch (error) {
-      console.warn(chalk.yellow(`⚠️  检查文件 ${file} 时出错: ${error.message}`));
+  if (filesToValidate.length === 0) {
+    console.log(chalk.green('✓ 没有需要检查的文件'));
+    return true;
+  }
+
+  // 一次性调用AI检查所有文件
+  try {
+    const errors = await validateWithAI(apiKey, filesToValidate, config);
+    
+    if (errors && errors.length > 0) {
+      allErrors.push(...errors);
     }
+  } catch (aiError) {
+    // 格式化错误信息
+    const errorMsg = aiError.message || String(aiError);
+    console.error(chalk.red(`  ❌ AI校验失败: ${errorMsg}`));
+    
+    // 记录错误
+    filesToValidate.forEach(file => {
+      allErrors.push({
+        rule: 0,
+        file: file.path,
+        line: 0,
+        message: `AI校验失败: ${errorMsg}`,
+        suggestion: '请检查网络连接和API Key配置，或查看详细错误信息'
+      });
+    });
   }
 
   // 输出错误信息

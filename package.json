@@ -1,6 +1,6 @@
 {
   "name": "prina-pre-commit-check",
-  "version": "1.0.0-ai",
+  "version": "1.0.0-ai-beta.1",
   "description": "Git pre-commit hook for frontend code quality checks using ZhipuAI API",
   "main": "commit-check-core.js",
   "bin": {

@@ -262,15 +262,8 @@ async function validateWithAI(apiKey, files, config) {
       }
     }
 
-    // 思考完成后，清除之前显示的所有思考过程
-    if (isTTY && totalOutputLength > 0 && savedCursorPos && hasReachedJSON) {
-      // 清除JSON输出之前的所有思考过程
-      const linesToClear = Math.ceil(totalOutputLength / 80) + 2;
-      for (let i = 0; i < linesToClear; i++) {
-        process.stdout.write('\x1b[1A'); // 上移一行
-        process.stdout.write('\x1b[2K'); // 清除整行
-      }
-    } else if (!isTTY) {
+    // 思考过程保留在控制台，不进行清除
+    if (!isTTY) {
       process.stdout.write('\n\n');
     }
 
@@ -360,6 +353,10 @@ function buildMultiFilesPrompt(files, config) {
     enabledRules.push(5);
     rulesDescriptions.push(buildRule5Prompt(config.rule5));
   }
+  if (config.rule6?.enabled) {
+    enabledRules.push(6);
+    rulesDescriptions.push(buildRule6Prompt(config.rule6));
+  }
 
   let prompt = `请检查以下 ${files.length} 个代码文件是否符合规范：\n\n`;
 
@@ -389,7 +386,7 @@ function buildMultiFilesPrompt(files, config) {
       "passed": true/false,
       "violations": [
         {
-          "rule": 规则编号（1-5）,
+          "rule": 规则编号（1-6）,
           "line": 行号（使用文件内容中标注的行号）,
           "message": "错误描述",
           "suggestion": "修复建议"
@@ -508,6 +505,7 @@ function displayCheckResults(files, errors, config) {
   if (config.rule3?.enabled) enabledRules.push(3);
   if (config.rule4?.enabled) enabledRules.push(4);
   if (config.rule5?.enabled) enabledRules.push(5);
+  if (config.rule6?.enabled) enabledRules.push(6);
 
   // 输出每个文件的检查结果
   files.forEach(file => {
@@ -665,6 +663,27 @@ function buildRule5Prompt(ruleConfig) {
 }
 
 /**
+ * 构建规则6的Prompt描述
+ */
+function buildRule6Prompt(ruleConfig) {
+  return `规则6：PageLayout组件使用规范检查
+
+检查条件：当检测到PageLayout组件，且组件来源包含"jjb-react-admin-component"时，必须符合以下规范：
+
+1. 必须引入装饰器：
+   import { Interpolation } from '@cqsjjb/jjb-common-decorator/namespace';
+
+2. 组件必须使用Interpolation装饰器：
+   - 如果是类组件，使用注解形式放在组件最上面：@Interpolation
+   - 如果是函数组件，使用高阶组件形式：export default Interpolation(ComponentName);
+
+3. PageLayout的title属性必须首先使用props.insert('DEFAULT_MENU')，其次才是自定义名称：
+   title={props.insert('DEFAULT_MENU') || "自定义名称"}
+
+注意：如果代码中没有使用PageLayout组件，或PageLayout组件来源不包含"jjb-react-admin-component"，则无需检查此规则。`
+}
+
+/**
  * 构建用户Prompt
  */
 function buildUserPrompt(filePath, fileContent, diff, rulesDescriptions, enabledRules, isUIFile = true) {
@@ -724,7 +743,7 @@ ${truncatedDiff ? `\nGit Diff内容（仅显示变更部分）：\n\`\`\`\n${tru
   "passed": true/false,
   "violations": [
     {
-      "rule": 规则编号（1-5）,
+      "rule": 规则编号（1-6）,
       "line": 行号（使用文件内容中标注的行号）,
       "message": "错误描述",
       "suggestion": "修复建议"

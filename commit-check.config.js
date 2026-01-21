@@ -33,6 +33,11 @@ module.exports = {
     enabled: true,
   },
 
+  // 规则6：PageLayout组件使用规范检查
+  rule6: {
+    enabled: true,
+  },
+
   // 全局配置
   global: {
     // 智普AI API Key（可选，优先使用环境变量 ZHIPUAI_API_KEY）

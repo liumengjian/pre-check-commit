@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { Interpolation } from '@cqsjjb/jjb-common-decorator/namespace'
+import PageLayout from 'jjb-react-admin-component-new/PageLayout';
 
 import { Form, Modal, Input, Button, Select } from 'antd';
 
@@ -27,6 +29,9 @@ const test = props => {
       footer={null}
       onCancel={() => {}}
     >
+      <PageLayout title="课程名称">
+
+      </PageLayout>
       <Form form={form} onFinish={onFinish}>
         <Form.Item
           name="courseName"
@@ -54,4 +59,4 @@ const test = props => {
     </Modal>
   );
 };
-export default test;
+export default Interpolation(test);

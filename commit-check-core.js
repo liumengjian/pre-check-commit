@@ -259,7 +259,8 @@ function getRuleName(ruleNum) {
     2: '首次进入页面缺失 loading 状态',
     3: '接口操作成功后缺失轻提示',
     4: '非 Table 列表缺失自定义空状态',
-    5: '表单输入项缺失 placeholder 提示'
+    5: '表单输入项缺失 placeholder 提示',
+    6: 'PageLayout组件使用规范不符合'
   };
   return names[ruleNum] || '未知规则';
 }

@@ -4,6 +4,7 @@
  */
 
 const ZhipuAIClient = require('./lib/zhipuai-client');
+const path = require('path');
 
 // 智普AI API配置
 const DEFAULT_MODEL = 'glm-4.7';
@@ -527,8 +528,15 @@ function displayCheckResults(files, errors, config) {
       } else {
         process.stdout.write(`规则【${ruleNum}】：不通过\n`);
         ruleErrors.forEach((error, index) => {
+          // 输出可点击的文件路径和行号（VS Code终端支持 file:// 协议或相对路径格式）
+          const filePath = path.resolve(process.cwd(), error.file);
+          const fileUrl = `file:///${filePath.replace(/\\/g, '/')}`;
           if (error.line > 0) {
-            process.stdout.write(`  行号：${error.line}\n`);
+            // 带行号的文件路径，可以点击跳转（VS Code终端会自动识别 file:// 协议）
+            process.stdout.write(`  文件：${fileUrl}:${error.line}\n`);
+          } else {
+            // 只有文件路径
+            process.stdout.write(`  文件：${fileUrl}\n`);
           }
           if (error.message) {
             process.stdout.write(`  原因：${error.message}\n`);

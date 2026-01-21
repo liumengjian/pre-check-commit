@@ -44,7 +44,7 @@ const test = props => {
           </Button>
         </Form.Item>
         <Form.Item>
-          <Select placeholder>
+          <Select>
             <Select.Option value="1">选项1</Select.Option>
             <Select.Option value="2">选项2</Select.Option>
             <Select.Option value="3">选项3</Select.Option>

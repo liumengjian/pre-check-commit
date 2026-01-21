@@ -220,10 +220,18 @@ async function runChecks() {
       } else {
       console.log(chalk.red(`【规则 ${error.rule} 不通过】- ${getRuleName(error.rule)}`));
       }
-      console.log(chalk.white(`文件：${error.file}`));
+      
+      // 输出可点击的文件路径（VS Code终端支持 file:// 协议）
+      const filePath = path.resolve(process.cwd(), error.file);
+      const fileUrl = `file:///${filePath.replace(/\\/g, '/')}`;
       if (error.line > 0) {
-      console.log(chalk.white(`行号：${error.line}`));
+        // 带行号的文件路径，可以点击跳转
+        console.log(chalk.blue.underline(`${fileUrl}:${error.line}`));
+      } else {
+        // 只有文件路径
+        console.log(chalk.blue.underline(fileUrl));
       }
+      
       console.log(chalk.yellow(`问题：${error.message}`));
       if (error.suggestion) {
       console.log(chalk.cyan(`修复建议：${error.suggestion}`));

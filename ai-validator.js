@@ -62,8 +62,6 @@ async function validateWithAI(apiKey, files, config) {
     let streamBuffer = '';
     let hasStartedRuleCheck = false;
     let hasReachedJSON = false; // 是否到达JSON部分
-    let totalOutputLength = 0;
-    let savedCursorPos = false;
     const isTTY = process.stdout.isTTY;
     
     // 需要跳过的元信息模式
@@ -125,21 +123,10 @@ async function validateWithAI(apiKey, files, config) {
           // 检查是否包含"生成输出"、"构建JSON"、"最终审查"、"格式化输出"等需要跳过的内容
           const shouldSkipOutput = skipOutputPatterns.some(pattern => pattern.test(streamBuffer));
           
-          // 检测是否到达JSON部分（开始输出JSON时，清除之前的思考过程）
           // 只匹配行首的{，避免匹配代码中的{
           if (!hasReachedJSON && streamBuffer.match(/^\s*\{/)) {
             hasReachedJSON = true;
-            // 清除之前显示的所有思考过程
-            if (isTTY && savedCursorPos && totalOutputLength > 0) {
-              // 计算需要清除的行数（粗略估算，每80字符一行）
-              const linesToClear = Math.ceil(totalOutputLength / 80) + 5;
-              for (let i = 0; i < linesToClear; i++) {
-                process.stdout.write('\x1b[1A'); // 上移一行
-                process.stdout.write('\x1b[2K'); // 清除整行
-              }
-              totalOutputLength = 0;
-              savedCursorPos = false;
-            }
+            // 不再清除之前的思考过程，保留所有分析过程
             streamBuffer = '';
             return;
           }
@@ -155,16 +142,7 @@ async function validateWithAI(apiKey, files, config) {
             // 如果检测到"生成输出"、"构建JSON"、"最终审查"、"格式化输出"等关键词，跳过这部分，等待JSON
             if (streamBuffer.match(/^\s*\{/)) {
               hasReachedJSON = true;
-              // 清除之前的思考过程
-              if (isTTY && savedCursorPos && totalOutputLength > 0) {
-                const linesToClear = Math.ceil(totalOutputLength / 80) + 5;
-                for (let i = 0; i < linesToClear; i++) {
-                  process.stdout.write('\x1b[1A');
-                  process.stdout.write('\x1b[2K');
-                }
-                totalOutputLength = 0;
-                savedCursorPos = false;
-              }
+              // 不再清除之前的思考过程，保留所有分析过程
               streamBuffer = '';
               return;
             } else {
@@ -182,10 +160,6 @@ async function validateWithAI(apiKey, files, config) {
                 const startIndex = match.index;
                 const ruleEvalContent = streamBuffer.substring(startIndex);
                 if (ruleEvalContent) {
-                  if (!savedCursorPos && isTTY) {
-                    process.stdout.write('\x1b[s'); // 保存光标位置
-                    savedCursorPos = true;
-                  }
                   // 重新编号：将序号从3开始改为从1开始
                   let contentToShow = ruleEvalContent;
                   // 替换序号：将"3."改为"1."，"4."改为"2."等
@@ -198,7 +172,6 @@ async function validateWithAI(apiKey, files, config) {
                     return match;
                   });
                   process.stdout.write(contentToShow);
-                  totalOutputLength += contentToShow.length;
                   streamBuffer = '';
                 }
               }
@@ -217,10 +190,6 @@ async function validateWithAI(apiKey, files, config) {
               return;
             }
             
-            if (!savedCursorPos && isTTY) {
-              process.stdout.write('\x1b[s');
-              savedCursorPos = true;
-            }
             // 重新编号：将序号从3开始改为从1开始
             let contentToShow = chunk;
             // 替换序号：将"3."改为"1."，"4."改为"2."等
@@ -233,7 +202,6 @@ async function validateWithAI(apiKey, files, config) {
               return match;
             });
             process.stdout.write(contentToShow);
-            totalOutputLength += contentToShow.length;
             streamBuffer = '';
           }
           
@@ -251,14 +219,12 @@ async function validateWithAI(apiKey, files, config) {
       if (jsonStartIndex >= 0) {
         streamBuffer = streamBuffer.substring(jsonStartIndex);
         process.stdout.write(streamBuffer);
-        totalOutputLength += streamBuffer.length;
       }
     } else if (hasStartedRuleCheck && !hasReachedJSON && streamBuffer) {
       // 检查是否包含"生成输出"
       const shouldSkipOutput = skipOutputPatterns.some(pattern => pattern.test(streamBuffer));
       if (!shouldSkipOutput && !streamBuffer.includes('{')) {
         process.stdout.write(streamBuffer);
-        totalOutputLength += streamBuffer.length;
       }
     }
 
@@ -332,31 +298,39 @@ function buildMultiFilesPrompt(files, config) {
   const enabledRules = [];
   const rulesDescriptions = [];
   
-  // 检查哪些规则启用
-  if (config.rule1?.enabled) {
-    enabledRules.push(1);
-    rulesDescriptions.push(buildRule1Prompt(config.rule1));
+  // 动态读取所有启用的规则
+  // 遍历配置对象，查找所有 ruleX 格式的配置项
+  for (const key in config) {
+    if (key.startsWith('rule') && config[key]?.enabled) {
+      // 提取规则编号（支持 rule1, rule2, rule7 等）
+      const ruleMatch = key.match(/^rule(\d+)$/);
+      if (ruleMatch) {
+        const ruleNum = parseInt(ruleMatch[1], 10);
+        enabledRules.push(ruleNum);
+        // 从配置中读取规则描述
+        const ruleConfig = config[key];
+        if (ruleConfig.description) {
+          rulesDescriptions.push(ruleConfig.description);
+        } else {
+          // 如果没有 description，使用 name 或默认描述
+          const ruleName = ruleConfig.name || `规则${ruleNum}`;
+          rulesDescriptions.push(`${ruleName}：请检查代码是否符合该规则要求。`);
+        }
+      }
+    }
   }
-  if (config.rule2?.enabled) {
-    enabledRules.push(2);
-    rulesDescriptions.push(buildRule2Prompt(config.rule2));
-  }
-  if (config.rule3?.enabled) {
-    enabledRules.push(3);
-    rulesDescriptions.push(buildRule3Prompt(config.rule3));
-  }
-  if (config.rule4?.enabled) {
-    enabledRules.push(4);
-    rulesDescriptions.push(buildRule4Prompt(config.rule4));
-  }
-  if (config.rule5?.enabled) {
-    enabledRules.push(5);
-    rulesDescriptions.push(buildRule5Prompt(config.rule5));
-  }
-  if (config.rule6?.enabled) {
-    enabledRules.push(6);
-    rulesDescriptions.push(buildRule6Prompt(config.rule6));
-  }
+  
+  // 按规则编号排序
+  const sortedRules = enabledRules.map((num, index) => ({ num, index }))
+    .sort((a, b) => a.num - b.num);
+  enabledRules.length = 0;
+  const sortedDescriptions = [];
+  sortedRules.forEach(({ num, index }) => {
+    enabledRules.push(num);
+    sortedDescriptions.push(rulesDescriptions[index]);
+  });
+  rulesDescriptions.length = 0;
+  rulesDescriptions.push(...sortedDescriptions);
 
   let prompt = `请检查以下 ${files.length} 个代码文件是否符合规范：\n\n`;
 
@@ -377,6 +351,11 @@ function buildMultiFilesPrompt(files, config) {
     prompt += `\n${desc}\n`;
   });
 
+  // 构建规则编号范围提示
+  const ruleRangeText = enabledRules.length > 0 
+    ? `规则编号（${enabledRules.join(', ')}）`
+    : '规则编号';
+
   prompt += `\n⚠️ 请快速检查所有文件，直接返回JSON结果（不要展示思考过程，不要解释，只返回JSON）：
 
 {
@@ -386,7 +365,7 @@ function buildMultiFilesPrompt(files, config) {
       "passed": true/false,
       "violations": [
         {
-          "rule": 规则编号（1-6）,
+          "rule": ` + ruleRangeText + `,
           "line": 行号（使用文件内容中标注的行号）,
           "message": "错误描述",
           "suggestion": "修复建议"
@@ -498,14 +477,19 @@ function displayCheckResults(files, errors, config) {
     errorsByFile[error.file].push(error);
   });
 
-  // 获取启用的规则
+  // 动态获取启用的规则
   const enabledRules = [];
-  if (config.rule1?.enabled) enabledRules.push(1);
-  if (config.rule2?.enabled) enabledRules.push(2);
-  if (config.rule3?.enabled) enabledRules.push(3);
-  if (config.rule4?.enabled) enabledRules.push(4);
-  if (config.rule5?.enabled) enabledRules.push(5);
-  if (config.rule6?.enabled) enabledRules.push(6);
+  for (const key in config) {
+    if (key.startsWith('rule') && config[key]?.enabled) {
+      const ruleMatch = key.match(/^rule(\d+)$/);
+      if (ruleMatch) {
+        const ruleNum = parseInt(ruleMatch[1], 10);
+        enabledRules.push(ruleNum);
+      }
+    }
+  }
+  // 按规则编号排序
+  enabledRules.sort((a, b) => a - b);
 
   // 输出每个文件的检查结果
   files.forEach(file => {
@@ -599,89 +583,6 @@ function isUIComponentFile(filePath, fileContent) {
 }
 
 
-/**
- * 构建规则1的Prompt描述
- */
-function buildRule1Prompt(ruleConfig) {
-  return `规则1：按钮接口调用防重复提交检查
-
-检查条件：只要按钮点击后会触发接口调用时，必须实现防重复提交。
-
-已实现防重复提交的判断标准：
-- 按钮点击后调用接口前设置了loading 或 disabled，接口返回后修改了这个状态
-- 包含接口调用的方法使用了防抖或者节流
-
-注意：如果按钮没有触发接口调用，则无需检查此规则。`;
-}
-
-/**
- * 构建规则2的Prompt描述
- */
-function buildRule2Prompt(ruleConfig) {
-  return `规则2：页面初始化loading检查
-
-检查条件：页面初始化时（如useEffect、componentDidMount）调用了数据查询接口，且数据在页面主体中展示。
-
-注意：如果页面初始化时没有调用接口，则无需检查此规则。`;
-}
-
-/**
- * 构建规则3的Prompt描述
- */
-function buildRule3Prompt(ruleConfig) {
-  return `规则3：接口操作成功后轻提示检查
-
-检查条件：接口调用涉及数据变更操作（编辑、删除、新增、更新、发布、配置、状态变更等），或者其他涉及业务的操作。
-
-已实现轻提示的判断标准：
-- 接口成功后调用轻提示方法（如message.success、message.info、notification.success等）
-
-注意：纯查询操作（GET请求）通常不需要成功提示。`;
-}
-
-/**
- * 构建规则4的Prompt描述
- */
-function buildRule4Prompt(ruleConfig) {
-  return `规则4：非Table组件列表空状态自定义检查
-
-检查条件：页面主体内容通过循环渲染（如array.map()）生成自定义列表或卡片。
-
-已实现空状态的判断标准：
-- 有空状态处理（空状态组件、文本或图片）
-
-注意：使用集成了空状态的的数据项展示组件（如antd的Table组件） 无需检查此规则。`;
-}
-
-/**
- * 构建规则5的Prompt描述
- */
-function buildRule5Prompt(ruleConfig) {
-  return `规则5：表单输入项默认提示检查
-
-检查条件：代码中存在表单输入组件（Input、Select、DatePicker等）。`
-}
-
-/**
- * 构建规则6的Prompt描述
- */
-function buildRule6Prompt(ruleConfig) {
-  return `规则6：PageLayout组件使用规范检查
-
-检查条件：当检测到PageLayout组件，且组件来源包含"jjb-react-admin-component"时，必须符合以下规范：
-
-1. 必须引入装饰器：
-   import { Interpolation } from '@cqsjjb/jjb-common-decorator/namespace';
-
-2. 组件必须使用Interpolation装饰器：
-   - 如果是类组件，使用注解形式放在组件最上面：@Interpolation
-   - 如果是函数组件，使用高阶组件形式：export default Interpolation(ComponentName);
-
-3. PageLayout的title属性必须首先使用props.insert('DEFAULT_MENU')，其次才是自定义名称：
-   title={props.insert('DEFAULT_MENU') || "自定义名称"}
-
-注意：如果代码中没有使用PageLayout组件，或PageLayout组件来源不包含"jjb-react-admin-component"，则无需检查此规则。`
-}
 
 /**
  * 构建用户Prompt
@@ -737,13 +638,18 @@ ${truncatedDiff ? `\nGit Diff内容（仅显示变更部分）：\n\`\`\`\n${tru
     prompt += `\n${desc}\n`;
   });
 
+  // 构建规则编号范围提示
+  const ruleRangeText = enabledRules && enabledRules.length > 0 
+    ? `规则编号（${enabledRules.join(', ')}）`
+    : '规则编号';
+
   prompt += `\n⚠️ 请快速检查代码，直接返回JSON结果（不要展示思考过程，不要解释，不要输出分析步骤，只返回JSON）：
 
 {
   "passed": true/false,
   "violations": [
     {
-      "rule": 规则编号（1-6）,
+      "rule": ` + ruleRangeText + `,
       "line": 行号（使用文件内容中标注的行号）,
       "message": "错误描述",
       "suggestion": "修复建议"

@@ -36,6 +36,7 @@ const test = props => {
         <Form.Item
           name="courseName"
           label="课程名称"
+          
         >
           <Input />
         </Form.Item>

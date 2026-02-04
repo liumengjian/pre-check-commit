@@ -254,15 +254,13 @@ async function runChecks() {
  * 获取规则名称
  */
 function getRuleName(ruleNum) {
-  const names = {
-    1: '防重复提交缺失',
-    2: '首次进入页面缺失 loading 状态',
-    3: '接口操作成功后缺失轻提示',
-    4: '非 Table 列表缺失自定义空状态',
-    5: '表单输入项缺失 placeholder 提示',
-    6: 'PageLayout组件使用规范不符合'
-  };
-  return names[ruleNum] || '未知规则';
+  // 从配置中动态读取规则名称
+  const ruleKey = `rule${ruleNum}`;
+  if (config[ruleKey] && config[ruleKey].name) {
+    return config[ruleKey].name;
+  }
+  // 如果没有配置名称，返回默认名称
+  return `规则${ruleNum}`;
 }
 
 // 如果直接运行此文件，执行检查

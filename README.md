@@ -1,13 +1,17 @@
 # Git Pre-Commit 代码检查工具
 
-前端 Git 提交阶段（pre-commit 钩子）的代码自动检查工具，基于 husky + lint-staged 实现，自动检测代码是否符合 4 项核心业务规范。
+前端 Git 提交阶段（pre-commit 钩子）的代码自动检查工具，基于 husky + 智普AI API 实现，自动检测代码是否符合业务规范。
 
 ## 📋 功能特性
 
-- ✅ **规则1**：新增按钮接口调用防重复提交检查
-- ✅ **规则2**：新增列表/详情页首次进入 loading 检查
+- ✅ **规则1**：按钮接口调用防重复提交检查
+- ✅ **规则2**：页面初始化 loading 检查
 - ✅ **规则3**：接口操作成功后轻提示检查
 - ✅ **规则4**：非 Table 组件列表空状态自定义检查
+- ✅ **规则5**：表单输入项默认提示检查
+- ✅ **规则6**：PageLayout组件使用规范检查
+- ✅ **动态规则支持**：支持添加自定义规则（rule7, rule8 等）
+- ✅ **AI 智能分析**：使用智普AI API 进行代码智能检查，显示完整的分析过程
 
 ## 🚀 快速开始
 
@@ -71,14 +75,30 @@ npx husky install
 
 详细说明请参考 [GLOBAL_INSTALL.md](./GLOBAL_INSTALL.md)
 
-#### 3. 配置检查规则
+#### 3. 配置 API Key
+
+设置智普AI API Key（二选一）：
+
+**方式一：环境变量（推荐）**
+```bash
+# Windows (PowerShell)
+$env:ZHIPUAI_API_KEY="your_api_key_here"
+
+# Linux/Mac
+export ZHIPUAI_API_KEY="your_api_key_here"
+```
+
+**方式二：配置文件**
+编辑项目根目录下的 `commit-check.config.js` 文件，在 `global.apiKey` 中设置。
+
+#### 4. 配置检查规则
 
 编辑项目根目录下的 `commit-check.config.js` 文件，根据项目需求配置：
 - 启用/禁用指定检查规则
-- 配置白名单文件/目录
-- 自定义关键词（方法名、组件名等）
+- 自定义规则名称和描述
+- 添加自定义规则（rule7, rule8 等）
 
-#### 4. 测试
+#### 5. 测试
 
 执行 Git 提交时，会自动触发检查：
 
@@ -86,6 +106,8 @@ npx husky install
 git add .
 git commit -m "test: 测试提交"
 ```
+
+校验过程中会实时显示 AI 的分析过程，帮助理解检查逻辑。
 
 ### 方式二：本地开发模式
 
@@ -123,97 +145,136 @@ yarn prepare
 
 ```javascript
 module.exports = {
-  // 规则1：新增按钮接口调用防重复提交检查
+  // 规则1：按钮接口调用防重复提交检查
   rule1: {
+    name: '防重复提交缺失',  // 规则名称（用于显示）
+    description: `规则1：按钮接口调用防重复提交检查
+
+检查条件：只要按钮点击后会触发接口调用时，必须实现防重复提交。
+
+已实现防重复提交的判断标准：
+- 按钮点击后调用接口前设置了loading 或 disabled，接口返回后修改了这个状态
+- 包含接口调用的方法使用了防抖或者节流
+
+注意：如果按钮没有触发接口调用，则无需检查此规则。`,
     enabled: true,  // 是否启用
-    whitelist: {
-      keywords: ['查看', '取消', '返回']  // 无需防重复提交的按钮关键词
-    },
-    customKeywords: {
-      requestMethods: ['fetch', 'axios', 'request']  // 自定义请求方法名
-    }
   },
-  
+
+  // 规则2：页面初始化loading检查
+  rule2: {
+    name: '首次进入页面缺失 loading 状态',
+    description: `规则2：页面初始化loading检查
+
+检查条件：页面初始化时（如useEffect、componentDidMount）调用了数据查询接口，且数据在页面主体中展示。
+
+注意：如果页面初始化时没有调用接口，则无需检查此规则。`,
+    enabled: true,
+  },
+
   // ... 其他规则配置
+
+  // 全局配置
+  global: {
+    // 智普AI API Key（可选，优先使用环境变量 ZHIPUAI_API_KEY）
+    apiKey: 'your_api_key_here',
+    // 需要检查的文件后缀
+    fileExtensions: ['.html', '.js', '.ts', '.vue', '.jsx', '.tsx'],
+    // 忽略的文件/目录（支持 glob 模式）
+    ignore: ['node_modules/**', 'dist/**', 'build/**', '*.min.js']
+  }
 };
 ```
 
-### 规则配置项
+### 规则配置项说明
 
-#### 规则1：防重复提交检查
-- `whitelist.keywords`: 无需防重复提交的按钮关键词列表
-- `customKeywords.requestMethods`: 自定义请求方法名列表
+每个规则包含以下配置项：
 
-#### 规则2：Loading 检查
-- `whitelist.paths`: 无需 loading 的页面路径（支持 glob 模式）
-- `customKeywords.loadingMethods`: 自定义 loading 方法名列表
+- **`name`** (必需): 规则名称，用于错误信息显示
+- **`description`** (必需): 规则的详细描述，用于 AI 检查时的提示
+- **`enabled`** (必需): 是否启用该规则检查（`true`/`false`）
 
-#### 规则3：轻提示检查
-- `whitelist.paths`: 无需轻提示的接口路径
-- `whitelist.keywords`: 无需轻提示的操作关键词（如批量操作）
-- `customKeywords.successMethods`: 自定义成功提示方法名列表
+### 添加自定义规则
 
-#### 规则4：空状态检查
-- `whitelist.keywords`: 无需空状态的列表关键词
-- `customKeywords.emptyComponents`: 自定义空状态组件名列表
+你可以在配置文件中添加自定义规则（如 rule7, rule8 等）：
+
+```javascript
+// 示例：添加自定义规则
+rule7: {
+  name: '自定义规则名称',
+  description: `规则7：自定义规则描述
+
+检查条件：在这里描述你的检查条件。
+
+判断标准：
+- 标准1
+- 标准2
+
+注意：其他说明信息。`,
+  enabled: true, // 设置为 true 启用此规则
+},
+```
+
+系统会自动识别并应用所有启用的规则（包括自定义规则）。
 
 ## 📝 检查规则详情
 
-### 规则1：新增按钮接口调用防重复提交检查
+### 规则1：按钮接口调用防重复提交检查
 
-**检查目标**：本次提交中新增的按钮对应的点击事件处理函数
+**检查条件**：只要按钮点击后会触发接口调用时，必须实现防重复提交。
 
-**检查逻辑**：
-1. 识别新增按钮及关联的点击事件
-2. 判断点击事件是否调用接口
-3. 判断接口调用是否实现防重复提交（按钮禁用/防抖节流/状态锁）
+**已实现防重复提交的判断标准**：
+- 按钮点击后调用接口前设置了 loading 或 disabled，接口返回后修改了这个状态
+- 包含接口调用的方法使用了防抖或者节流
 
-**有效实现方式**：
-- 按钮级：点击后禁用按钮，接口完成后解除禁用
-- 函数级：使用防抖/节流函数包装（延迟≥500ms）
-- 状态级：通过布尔状态锁控制
+**注意**：如果按钮没有触发接口调用，则无需检查此规则。
 
-### 规则2：新增列表/详情页首次进入 loading 检查
+### 规则2：页面初始化 loading 检查
 
-**检查目标**：本次提交中新增的列表页、详情页
+**检查条件**：页面初始化时（如 useEffect、componentDidMount）调用了数据查询接口，且数据在页面主体中展示。
 
-**检查逻辑**：
-1. 识别新增列表/详情页
-2. 判断首次进入页面是否存在 loading 状态
-3. 验证 loading 逻辑的完整性（覆盖请求全生命周期）
-
-**有效实现方式**：
-- 全局 loading：调用项目封装的全局 loading 方法
-- 页面级 loading：页面内 loading 组件，通过布尔状态控制
-- 组件级 loading：列表/详情容器组件自带 loading 配置
+**注意**：如果页面初始化时没有调用接口，则无需检查此规则。
 
 ### 规则3：接口操作成功后轻提示检查
 
-**检查目标**：本次提交中新增/修改的 POST/PUT 类型接口操作逻辑
+**检查条件**：接口调用涉及数据变更操作（编辑、删除、新增、更新、发布、配置、状态变更等），或者其他涉及业务的操作。
 
-**检查逻辑**：
-1. 识别目标接口操作（POST/PUT 类型）
-2. 判断成功后是否存在有效轻提示
-3. 验证轻提示与接口成功的关联性
+**已实现轻提示的判断标准**：
+- 接口成功后调用轻提示方法（如 message.success、message.info、notification.success 等）
 
-**有效实现方式**：
-- 调用项目通用轻提示方法（如 `message.success()`）
-- 调用框架内置轻提示组件（如 `ElMessage`、`Antd Message`）
-- 自定义轻提示组件，包含明确的成功提示文案
+**注意**：纯查询操作（GET 请求）通常不需要成功提示。
 
 ### 规则4：非 Table 组件列表空状态自定义检查
 
-**检查目标**：本次提交中新增的列表逻辑，且未使用 Table 组件
+**检查条件**：页面主体内容通过循环渲染（如 array.map()）生成自定义列表或卡片。
 
-**检查逻辑**：
-1. 识别非 Table 组件的列表
-2. 判断是否实现自定义空状态
-3. 验证空状态的有效性
+**已实现空状态的判断标准**：
+- 有空状态处理（空状态组件、文本或图片）
 
-**有效实现方式**：
-- 条件渲染空状态提示（如 `v-if="!list.length"`）
-- 调用项目封装的通用空状态组件（如 `Empty`、`NoData`）
-- 为列表容器设置默认空状态占位
+**注意**：使用集成了空状态的数据项展示组件（如 antd 的 Table 组件）无需检查此规则。
+
+### 规则5：表单输入项默认提示检查
+
+**检查条件**：代码中存在表单输入组件（Input、Select、DatePicker 等）。
+
+### 规则6：PageLayout组件使用规范检查
+
+**检查条件**：当检测到 PageLayout 组件，且组件来源包含 "jjb-react-admin-component" 时，必须符合以下规范：
+
+1. **必须引入装饰器**：
+   ```javascript
+   import { Interpolation } from '@cqsjjb/jjb-common-decorator/namespace';
+   ```
+
+2. **组件必须使用 Interpolation 装饰器**：
+   - 如果是类组件，使用注解形式放在组件最上面：`@Interpolation`
+   - 如果是函数组件，使用高阶组件形式：`export default Interpolation(ComponentName);`
+
+3. **PageLayout 的 title 属性必须首先使用 props.insert('DEFAULT_MENU')，其次才是自定义名称**：
+   ```javascript
+   title={props.insert('DEFAULT_MENU') || "自定义名称"}
+   ```
+
+**注意**：如果代码中没有使用 PageLayout 组件，或 PageLayout 组件来源不包含 "jjb-react-admin-component"，则无需检查此规则。
 
 ## 🔧 常见问题
 
@@ -245,9 +306,37 @@ git commit --no-verify -m "紧急修复"
 ### Q: 检查耗时过长怎么办？
 
 **A**: 
-- 工具使用 `lint-staged` 仅检查暂存区文件，不会全量检查
-- 单文件检查耗时通常 ≤ 1s
+- 工具仅检查暂存区文件，不会全量检查
+- 使用 AI 进行智能检查，会显示完整的分析过程
 - 如果仍然耗时过长，可以检查配置文件中的 `ignore` 设置，确保排除了不必要的文件
+
+### Q: 如何添加自定义规则？
+
+**A**: 
+1. 在 `commit-check.config.js` 中添加新的规则配置（如 `rule7`）
+2. 设置 `name`（规则名称）、`description`（规则详细描述）和 `enabled`（是否启用）
+3. 系统会自动识别并应用该规则
+
+示例：
+```javascript
+rule7: {
+  name: '自定义规则名称',
+  description: `规则7：自定义规则描述
+
+检查条件：在这里描述你的检查条件。`,
+  enabled: true,
+}
+```
+
+### Q: API Key 如何配置？
+
+**A**: 
+推荐使用环境变量配置（优先级更高）：
+```bash
+export ZHIPUAI_API_KEY="your_api_key_here"
+```
+
+也可以在配置文件的 `global.apiKey` 中设置（不推荐，可能泄露到代码仓库）。
 
 ## 📊 验收步骤
 
@@ -290,6 +379,7 @@ git commit -m "test: 测试规则1通过"
 - `rule2-violation.tsx` / `rule2-pass.tsx` - 规则2测试用例
 - `rule3-violation.js` / `rule3-pass.js` - 规则3测试用例
 - `rule4-violation.vue` / `rule4-pass.vue` - 规则4测试用例
+- `rule1-rule3-test.vue` - 规则1和规则3组合测试用例
 
 ## 📦 在其他项目中使用
 
@@ -374,25 +464,30 @@ rm commit-check.config.js
 
 ### 核心依赖
 
-- `@babel/parser`: JavaScript/TypeScript/JSX 代码解析
-- `@babel/traverse`: AST 遍历
-- `@babel/types`: AST 节点类型判断
 - `chalk`: 终端颜色输出
-- `glob`: 文件匹配
+- 智普AI API: 用于智能代码检查和分析
 
 ### 开发依赖（仅开发此工具时需要）
 
 - `husky`: Git 钩子管理
-- `lint-staged`: 仅检查暂存区文件
+
+### API 配置
+
+本工具使用智普AI API 进行代码智能检查，需要配置 API Key：
+
+1. **获取 API Key**：访问 [智普AI官网](https://open.bigmodel.cn/) 注册并获取 API Key
+2. **配置 API Key**：通过环境变量或配置文件设置（见配置说明）
 
 ## 🔄 工作流程
 
 1. 用户执行 `git commit -m "xxx"`
 2. 触发 pre-commit 钩子
-3. `lint-staged` 筛选暂存区中符合后缀的文件
-4. 对筛选后的文件依次执行 4 项核心检查规则
-5. 若所有检查通过，放行 Git 提交流程
-6. 若任意一项检查不通过，终止提交流程，打印详细错误信息
+3. 筛选暂存区中符合后缀的文件（UI组件文件）
+4. 调用智普AI API 对文件进行智能检查
+5. 实时显示 AI 分析过程（流式输出）
+6. 解析检查结果，按规则分组显示
+7. 若所有检查通过，放行 Git 提交流程
+8. 若任意一项检查不通过，终止提交流程，打印详细错误信息（包含文件路径、行号、错误原因和修复建议）
 
 ## 📄 许可证
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * 设置智普AI API Key
- * 
+ * 设置 AI API 配置（API Key、URL、模型名称）
+ *
  * 用法：
  *   pre-commit-check-set-api-key <apiKey>
  *   或
@@ -45,76 +45,70 @@ function readConfig(configPath) {
 }
 
 /**
- * 更新配置文件中的API Key
+ * 更新配置文件中的字符串字段
  */
-function updateConfigApiKey(configPath, apiKey) {
+function updateConfigField(configPath, fieldName, value) {
   const content = readConfig(configPath);
-  const escapedApiKey = apiKey.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
-  
+  const escapedValue = value.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
+
   let newContent = content;
-  
-  // 1. 先移除注释掉的 apiKey 行（如果存在）
+
+  // 1. 先移除注释掉的对应行（如果存在）
   newContent = newContent.replace(
-    /\s*\/\/\s*apiKey\s*:\s*['"`][^'"`]+['"`]/g,
+    new RegExp(`\\s*\\/\\/\\s*${fieldName}\\s*:\\s*['"\`][^'"\`]+['"\`]`, 'g'),
     ''
   );
-  
-  // 2. 检查是否已经有未注释的 apiKey 配置
-  const hasApiKey = /apiKey\s*:\s*['"`][^'"`]+['"`]/.test(newContent);
-  
-  if (hasApiKey) {
-    // 替换现有的 apiKey（支持单引号、双引号、反引号）
+
+  // 2. 检查是否已经有未注释的配置
+  const hasField = new RegExp(`${fieldName}\\s*:\\s*['"\`][^'"\`]+['"\`]`).test(newContent);
+
+  if (hasField) {
+    // 替换现有的值（支持单引号、双引号、反引号）
     newContent = newContent.replace(
-      /apiKey\s*:\s*['"`][^'"`]+['"`]/,
-      `apiKey: '${escapedApiKey}'`
+      new RegExp(`${fieldName}\\s*:\\s*['"\`][^'"\`]+['"\`]`),
+      `${fieldName}: '${escapedValue}'`
     );
   } else {
-    // 在 global 对象中添加 apiKey
-    // 查找 global: { 的位置，考虑可能的注释
+    // 在 global 对象中添加
     const globalMatch = newContent.match(/(global\s*:\s*\{)/);
     if (globalMatch) {
       const insertPos = globalMatch.index + globalMatch[0].length;
-      
+
       // 查找第一个配置项的位置（用于确定缩进）
       const afterGlobal = newContent.substring(insertPos);
       const firstLineMatch = afterGlobal.match(/^\s*\n(\s+)/);
       const indent = firstLineMatch ? firstLineMatch[1] : '    ';
-      
-      // 检查是否已经有其他配置项
-      const hasOtherConfig = /^\s*[a-zA-Z]/.test(afterGlobal.trim());
-      
-      if (hasOtherConfig) {
-        // 在其他配置项之前插入
-        newContent = 
-          newContent.substring(0, insertPos) +
-          `\n${indent}apiKey: '${escapedApiKey}',` +
-          newContent.substring(insertPos);
-      } else {
-        // 作为第一个配置项
-        newContent = 
-          newContent.substring(0, insertPos) +
-          `\n${indent}apiKey: '${escapedApiKey}',` +
-          newContent.substring(insertPos);
-      }
+
+      newContent =
+        newContent.substring(0, insertPos) +
+        `\n${indent}${fieldName}: '${escapedValue}',` +
+        newContent.substring(insertPos);
     } else {
       throw new Error('无法找到 global 配置对象');
     }
   }
-  
+
   return newContent;
 }
 
 /**
- * 交互式输入API Key
+ * 更新配置文件中的 API Key（保持向后兼容）
  */
-function promptApiKey() {
+function updateConfigApiKey(configPath, apiKey) {
+  return updateConfigField(configPath, 'apiKey', apiKey);
+}
+
+/**
+ * 交互式输入
+ */
+function prompt(question) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
     });
 
-    rl.question(chalk.blue('请输入智普AI API Key: '), (answer) => {
+    rl.question(question, (answer) => {
       rl.close();
       resolve(answer.trim());
     });
@@ -122,17 +116,12 @@ function promptApiKey() {
 }
 
 /**
- * 验证API Key格式（简单验证）
+ * 验证输入（简单验证）
  */
-function validateApiKey(apiKey) {
-  if (!apiKey || apiKey.trim().length === 0) {
-    return { valid: false, message: 'API Key不能为空' };
+function validateInput(value, fieldName) {
+  if (!value || value.trim().length === 0) {
+    return { valid: false, message: `${fieldName} 不能为空` };
   }
-  
-  if (apiKey.length < 10) {
-    return { valid: false, message: 'API Key格式不正确（长度过短）' };
-  }
-  
   return { valid: true };
 }
 
@@ -141,18 +130,26 @@ function validateApiKey(apiKey) {
  */
 async function main() {
   const args = process.argv.slice(2);
-  let apiKey = args[0];
 
-  // 如果没有提供参数，交互式输入
+  console.log(chalk.blue('🔧 配置 AI API 参数\n'));
+
+  // 交互式输入
+  let apiKey = args[0];
+  let url = args[1];
+  let model = args[2];
+
   if (!apiKey) {
-    apiKey = await promptApiKey();
+    apiKey = await prompt(chalk.blue('请输入 AI API Key（留空跳过）: '));
   }
 
-  // 验证API Key
-  const validation = validateApiKey(apiKey);
-  if (!validation.valid) {
-    console.error(chalk.red(`❌ ${validation.message}`));
-    process.exit(1);
+  if (!url) {
+    const currentUrl = getCurrentConfigValue('url') || 'https://open.bigmodel.cn/api/paas/v4';
+    url = await prompt(chalk.blue(`请输入 API URL（留空使用: ${currentUrl}）: `));
+  }
+
+  if (!model) {
+    const currentModel = getCurrentConfigValue('model') || 'glm-4.7';
+    model = await prompt(chalk.blue(`请输入模型名称（留空使用: ${currentModel}）: `));
   }
 
   // 查找配置文件
@@ -169,28 +166,47 @@ async function main() {
     fs.copyFileSync(configPath, backupPath);
     console.log(chalk.gray(`📋 已备份配置文件到: ${backupPath}`));
 
-    // 更新配置
-    const newContent = updateConfigApiKey(configPath, apiKey);
-    fs.writeFileSync(configPath, newContent, 'utf-8');
+    let currentContent = readConfig(configPath);
 
-    console.log(chalk.green('✓ API Key 已成功设置'));
-    console.log(chalk.blue(`📝 配置文件: ${configPath}`));
+    // 更新 API Key
+    if (apiKey) {
+      const validation = validateInput(apiKey, 'API Key');
+      if (!validation.valid) {
+        console.error(chalk.red(`❌ ${validation.message}`));
+        process.exit(1);
+      }
+      currentContent = updateConfigField(configPath, 'apiKey', apiKey);
+      // 将更新后的内容写入，以便后续更新可以基于最新内容
+      fs.writeFileSync(configPath, currentContent, 'utf-8');
+      console.log(chalk.green('✓ API Key 已更新'));
+    }
+
+    // 更新 URL
+    if (url) {
+      currentContent = updateConfigField(configPath, 'url', url);
+      fs.writeFileSync(configPath, currentContent, 'utf-8');
+      console.log(chalk.green('✓ API URL 已更新'));
+    }
+
+    // 更新模型
+    if (model) {
+      currentContent = updateConfigField(configPath, 'model', model);
+      fs.writeFileSync(configPath, currentContent, 'utf-8');
+      console.log(chalk.green('✓ 模型名称已更新'));
+    }
+
+    console.log(chalk.blue(`\n📝 配置文件: ${configPath}`));
     console.log(chalk.yellow('\n💡 提示：'));
-    console.log(chalk.yellow('   - API Key已保存到配置文件中'));
-    console.log(chalk.yellow('   - 环境变量 ZHIPUAI_API_KEY 的优先级更高'));
-    console.log(chalk.yellow('   - Windows PowerShell: $env:ZHIPUAI_API_KEY="your_key"'));
-    console.log(chalk.yellow('   - Linux/Mac: export ZHIPUAI_API_KEY=your_key'));
-    
-    // 显示当前设置的API Key（部分隐藏）
-    const maskedKey = apiKey.length > 8 
-      ? apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)
-      : '***';
-    console.log(chalk.gray(`\n当前设置的API Key: ${maskedKey}`));
-    
+    console.log(chalk.yellow('   - 配置已保存到配置文件中'));
+    console.log(chalk.yellow('   - 环境变量的优先级更高'));
+    console.log(chalk.yellow('   - AI_API_URL: 设置 API 接口地址'));
+    console.log(chalk.yellow('   - AI_MODEL: 设置模型名称'));
+    console.log(chalk.yellow('   - AI_API_KEY: 设置 API Key'));
+
     process.exit(0);
   } catch (error) {
-    console.error(chalk.red(`❌ 设置API Key失败: ${error.message}`));
-    
+    console.error(chalk.red(`❌ 设置失败: ${error.message}`));
+
     // 如果备份文件存在，尝试恢复
     const backupPath = configPath + '.backup';
     if (fs.existsSync(backupPath)) {
@@ -201,8 +217,23 @@ async function main() {
         console.error(chalk.red(`恢复配置文件失败: ${restoreError.message}`));
       }
     }
-    
+
     process.exit(1);
+  }
+}
+
+/**
+ * 获取当前配置文件中某个字段的值（用于显示默认值）
+ */
+function getCurrentConfigValue(fieldName) {
+  try {
+    const configPath = findConfigPath();
+    if (!configPath) return null;
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const match = content.match(new RegExp(fieldName + "\\s*:\\s*['\"]([^'\"]+)['\"]"));
+    return match ? match[1] : null;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -214,5 +245,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { updateConfigApiKey, findConfigPath };
-
+module.exports = { updateConfigApiKey, updateConfigField, findConfigPath };

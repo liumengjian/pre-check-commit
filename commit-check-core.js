@@ -1,12 +1,7 @@
 /**
  * Git Pre-Commit 核心检查逻辑
- * 
- * 使用智普AI API实现5项核心检查规则：
- * 1. 新增按钮接口调用防重复提交检查
- * 2. 新增列表/详情页首次进入 loading 检查
- * 3. 接口操作成功后轻提示检查
- * 4. 非 Table 组件列表空状态自定义检查
- * 5. 表单输入项默认提示检查
+ *
+ * 使用 AI API 实现核心检查规则
  */
 
 const fs = require('fs');
@@ -46,20 +41,22 @@ if (!configLoaded) {
 }
 
 /**
- * 获取智普AI API Key
- * 优先级：环境变量 > 配置文件
+ * 获取 AI API Key
+ * 优先级：环境变量 AI_API_KEY > 环境变量 ZHIPUAI_API_KEY > 配置文件
  */
 function getApiKey() {
-  // 1. 从环境变量获取
+  // 1. 从新环境变量获取
+  if (process.env.AI_API_KEY) {
+    return process.env.AI_API_KEY;
+  }
+  // 2. 从旧环境变量获取（兼容）
   if (process.env.ZHIPUAI_API_KEY) {
     return process.env.ZHIPUAI_API_KEY;
   }
-  
-  // 2. 从配置文件获取
+  // 3. 从配置文件获取
   if (config.global && config.global.apiKey) {
     return config.global.apiKey;
   }
-  
   return null;
 }
 
@@ -122,9 +119,9 @@ async function runChecks() {
   // 检查API Key
   const apiKey = getApiKey();
   if (!apiKey) {
-    console.error(chalk.red('❌ 智普AI API Key未配置'));
-    console.error(chalk.yellow('💡 请设置环境变量 ZHIPUAI_API_KEY 或在配置文件中设置 global.apiKey'));
-    console.error(chalk.yellow('   例如：export ZHIPUAI_API_KEY=your_api_key'));
+    console.error(chalk.red('❌ AI API Key 未配置'));
+    console.error(chalk.yellow('💡 请设置环境变量 AI_API_KEY 或在配置文件中设置 global.apiKey'));
+    console.error(chalk.yellow('   例如：export AI_API_KEY=your_api_key'));
     process.exit(1);
   }
 
@@ -160,7 +157,7 @@ async function runChecks() {
   const filesToValidate = [];
   for (let i = 0; i < filesToCheck.length; i++) {
     const file = filesToCheck[i];
-    
+
     if (!fs.existsSync(file)) {
       console.warn(chalk.yellow(`⚠️  文件不存在: ${file}`));
       continue;
@@ -177,7 +174,7 @@ async function runChecks() {
       content: fileContent,
       diff: diff
     });
-    
+
     console.log(chalk.gray(`[${i + 1}/${filesToCheck.length}] 准备检查文件: ${file}`));
   }
 
@@ -189,7 +186,7 @@ async function runChecks() {
   // 一次性调用AI检查所有文件
   try {
     const errors = await validateWithAI(apiKey, filesToValidate, config);
-    
+
     if (errors && errors.length > 0) {
       allErrors.push(...errors);
     }
@@ -197,7 +194,7 @@ async function runChecks() {
     // 格式化错误信息
     const errorMsg = aiError.message || String(aiError);
     console.error(chalk.red(`  ❌ AI校验失败: ${errorMsg}`));
-    
+
     // 记录错误
     filesToValidate.forEach(file => {
       allErrors.push({
@@ -220,7 +217,7 @@ async function runChecks() {
       } else {
       console.log(chalk.red(`【规则 ${error.rule} 不通过】- ${getRuleName(error.rule)}`));
       }
-      
+
       // 输出可点击的文件路径（VS Code终端支持 file:// 协议）
       const filePath = path.resolve(process.cwd(), error.file);
       const fileUrl = `file:///${filePath.replace(/\\/g, '/')}`;
@@ -231,7 +228,7 @@ async function runChecks() {
         // 只有文件路径
         console.log(chalk.blue.underline(fileUrl));
       }
-      
+
       console.log(chalk.yellow(`问题：${error.message}`));
       if (error.suggestion) {
       console.log(chalk.cyan(`修复建议：${error.suggestion}`));

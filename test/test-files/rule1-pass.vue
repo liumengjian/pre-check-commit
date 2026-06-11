@@ -22,7 +22,7 @@ export default {
           console.log('提交成功', res);
         })
         .finally(() => {
-          this.isSubmitting = false;
+          // this.isSubmitting = false;
         });
     }
   }

@@ -1,13 +1,13 @@
 /**
- * Git Pre-Commit 代码检查配置文件
- * 
+  * Git Pre-Commit 代码检查配置文件
+ *
  * 配置说明：
  * - name: 规则名称（用于显示）
  * - description: 规则的详细描述（用于AI检查）
  * - enabled: 是否启用该规则检查（true/false）
  * - whitelist: 白名单配置，匹配到的文件/路径/关键词将跳过对应规则检查
  * - customKeywords: 自定义关键词配置，用于识别项目特定的方法名、组件名等
- * 
+ *
  * 注意：可以添加自定义规则（如 rule7, rule8 等），只需按照以下格式配置即可生效
  */
 
@@ -114,12 +114,15 @@ module.exports = {
 
   // 全局配置
   global: {
-    // 智普AI API Key（可选，优先使用环境变量 ZHIPUAI_API_KEY）
-    apiKey: '9594b4c3e98c48199b88c0c03313a05e.khRRy27VW6zxo3Dt',
+    // AI API 接口地址（可选，优先使用环境变量 AI_API_URL）
+    url: 'https://open.bigmodel.cn/api/paas/v4',
+    // AI 模型名称（可选，优先使用环境变量 AI_MODEL）
+    model: 'glm-4.6v-flash',
+    // AI API Key（可选，优先使用环境变量 AI_API_KEY）
+    apiKey: '1a6a4dd91a534cc78772d6e2625e613c.02SJOqB7rZdiBVLn',
     // 需要检查的文件后缀
     fileExtensions: ['.html', '.js', '.ts', '.vue', '.jsx', '.tsx'],
     // 忽略的文件/目录（支持 glob 模式）
     ignore: ['node_modules/**', 'dist/**', 'build/**', '*.min.js']
   }
 };
-

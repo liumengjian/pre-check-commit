@@ -1,30 +1,44 @@
 /**
  * AI 代码校验模块
- * 使用智普AI API进行代码规则校验
+ * 使用 AI API 进行代码规则校验
+ * 兼容 OpenAI 兼容的 API 接口（如智谱AI、DeepSeek 等）
  */
 
-const ZhipuAIClient = require('./lib/zhipuai-client');
+const AIClient = require('./lib/zhipuai-client');
 const path = require('path');
 
-// 智普AI API配置
-const DEFAULT_MODEL = 'glm-4.7';
+/**
+ * 获取 AI API 配置
+ * 优先级：环境变量 > 配置文件
+ */
+function getAIConfig(config) {
+  return {
+    apiKey: process.env.AI_API_KEY || process.env.ZHIPUAI_API_KEY || config.global?.apiKey,
+    url: process.env.AI_API_URL || config.global?.url || 'https://open.bigmodel.cn/api/paas/v4',
+    model: process.env.AI_MODEL || config.global?.model || 'glm-4.7'
+  };
+}
 
 /**
- * 调用智普AI API进行代码校验（批量检查多个文件）
- * @param {string} apiKey - 智普AI API Key
+ * 调用 AI API 进行代码校验（批量检查多个文件）
+ * @param {string} apiKey - AI API Key（已废弃，建议通过 config 传入）
  * @param {Array<Object>} files - 文件数组，每个对象包含 {path, content, diff}
  * @param {Object} config - 配置文件对象
  * @returns {Promise<Array>} 返回错误数组
  */
 async function validateWithAI(apiKey, files, config) {
-  if (!apiKey) {
-    throw new Error('智普AI API Key未配置，请设置环境变量 ZHIPUAI_API_KEY 或在配置文件中设置');
+  const aiConfig = getAIConfig(config);
+  // 优先使用 config 中的配置，兼容旧的 apiKey 参数
+  const effectiveApiKey = apiKey || aiConfig.apiKey;
+
+  if (!effectiveApiKey) {
+    throw new Error('AI API Key 未配置，请设置环境变量 AI_API_KEY 或在配置文件中设置 global.apiKey');
   }
 
   // 如果files是单个文件（向后兼容），转换为数组
   if (typeof files === 'string') {
     // 旧版本调用方式，保持兼容
-    return await validateSingleFileWithAI(apiKey, files, arguments[2], arguments[3], config);
+    return await validateSingleFileWithAI(effectiveApiKey, files, arguments[2], arguments[3], config);
   }
 
   if (!Array.isArray(files) || files.length === 0) {
@@ -46,24 +60,24 @@ async function validateWithAI(apiKey, files, config) {
 
   // 构建所有文件的prompt
   const allFilesPrompt = buildMultiFilesPrompt(filesToCheck, config);
-  
+
   // 调用API
   try {
-    const model = config.global?.model || DEFAULT_MODEL;
-    const client = new ZhipuAIClient(apiKey, {
-      model: model,
+    const client = new AIClient(effectiveApiKey, {
+      baseUrl: aiConfig.url,
+      model: aiConfig.model,
       timeout: 120000, // 增加超时时间，因为要检查多个文件
       maxRetries: 3
     });
 
     // 使用流式输出
     process.stdout.write('🤖 正在分析代码...\n\n');
-    
+
     let streamBuffer = '';
     let hasStartedRuleCheck = false;
     let hasReachedJSON = false; // 是否到达JSON部分
     const isTTY = process.stdout.isTTY;
-    
+
     // 需要跳过的元信息模式
     const skipPatterns = [
       /^\s*\*\s*\*\*分析请求：\*\*/i,
@@ -73,7 +87,7 @@ async function validateWithAI(apiKey, files, config) {
       /^\s*角色：/i,
       /^\s*任务：/i
     ];
-    
+
     // 需要跳过的"生成输出"相关模式
     const skipOutputPatterns = [
       /生成输出/i,
@@ -91,10 +105,10 @@ async function validateWithAI(apiKey, files, config) {
       /^\s*\d+\.\s*\*\*构建JSON/i,
       /^\s*\d+\.\s*\*\*最终审查/i
     ];
-    
+
     // 从"对照规则评估"或"对照规则检查"开始显示
     const ruleEvaluationPattern = /对照规则评估|对照规则检查|对照规则|规则评估/i;
-    
+
     // 需要跳过的代码片段模式（如"{loading}`（已注释）"等）
     const skipCodeSnippetPatterns = [
       /\{[^}]*\}\s*[（(]已注释/i,
@@ -112,17 +126,17 @@ async function validateWithAI(apiKey, files, config) {
       (chunk, type) => {
         if (chunk) {
           streamBuffer += chunk;
-          
+
           // 检查是否包含需要跳过的代码片段
           const shouldSkipCodeSnippet = skipCodeSnippetPatterns.some(pattern => pattern.test(streamBuffer));
           if (shouldSkipCodeSnippet) {
             streamBuffer = '';
             return;
           }
-          
+
           // 检查是否包含"生成输出"、"构建JSON"、"最终审查"、"格式化输出"等需要跳过的内容
           const shouldSkipOutput = skipOutputPatterns.some(pattern => pattern.test(streamBuffer));
-          
+
           // 只匹配行首的{，避免匹配代码中的{
           if (!hasReachedJSON && streamBuffer.match(/^\s*\{/)) {
             hasReachedJSON = true;
@@ -130,13 +144,13 @@ async function validateWithAI(apiKey, files, config) {
             streamBuffer = '';
             return;
           }
-          
+
           // 如果已经到达JSON部分，不输出任何内容（JSON会被解析后格式化显示）
           if (hasReachedJSON) {
             streamBuffer = '';
             return;
           }
-          
+
           // 还未到达JSON部分
           if (shouldSkipOutput) {
             // 如果检测到"生成输出"、"构建JSON"、"最终审查"、"格式化输出"等关键词，跳过这部分，等待JSON
@@ -189,7 +203,7 @@ async function validateWithAI(apiKey, files, config) {
               streamBuffer = '';
               return;
             }
-            
+
             // 重新编号：将序号从3开始改为从1开始
             let contentToShow = chunk;
             // 替换序号：将"3."改为"1."，"4."改为"2."等
@@ -204,7 +218,7 @@ async function validateWithAI(apiKey, files, config) {
             process.stdout.write(contentToShow);
             streamBuffer = '';
           }
-          
+
           if (isTTY && typeof process.stdout.flush === 'function') {
             process.stdout.flush();
           }
@@ -252,14 +266,14 @@ async function validateWithAI(apiKey, files, config) {
 
     // 解析多文件响应
     const errors = parseMultiFilesResponse(responseContent, filesToCheck);
-    
+
     // 显示格式化的检测结果
     displayCheckResults(filesToCheck, errors, config);
-    
+
     return errors;
   } catch (error) {
     const errorMsg = error.message || String(error);
-    console.error(`调用智普AI API失败: ${errorMsg}`);
+    console.error(`调用 AI API 失败: ${errorMsg}`);
     throw error;
   }
 }
@@ -297,7 +311,7 @@ function buildSystemPrompt(config) {
 function buildMultiFilesPrompt(files, config) {
   const enabledRules = [];
   const rulesDescriptions = [];
-  
+
   // 动态读取所有启用的规则
   // 遍历配置对象，查找所有 ruleX 格式的配置项
   for (const key in config) {
@@ -319,7 +333,7 @@ function buildMultiFilesPrompt(files, config) {
       }
     }
   }
-  
+
   // 按规则编号排序
   const sortedRules = enabledRules.map((num, index) => ({ num, index }))
     .sort((a, b) => a.num - b.num);
@@ -339,7 +353,7 @@ function buildMultiFilesPrompt(files, config) {
     const isNewFile = !file.diff || !file.diff.includes('---');
     const lines = file.content.split('\n');
     const numberedContent = lines.map((line, idx) => `${idx + 1}: ${line}`).join('\n');
-    
+
     prompt += `文件 ${index + 1}：${file.path}\n`;
     prompt += `文件扩展名：${fileExtension}\n`;
     prompt += `${isNewFile ? '文件状态：新增文件' : '文件状态：修改文件'}\n`;
@@ -352,7 +366,7 @@ function buildMultiFilesPrompt(files, config) {
   });
 
   // 构建规则编号范围提示
-  const ruleRangeText = enabledRules.length > 0 
+  const ruleRangeText = enabledRules.length > 0
     ? `规则编号（${enabledRules.join(', ')}）`
     : '规则编号';
 
@@ -387,11 +401,11 @@ function buildMultiFilesPrompt(files, config) {
  */
 function parseMultiFilesResponse(responseContent, files) {
   const allErrors = [];
-  
+
   try {
     let jsonStr = responseContent.trim();
     jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```$/i, '');
-    
+
     let jsonStart = jsonStr.indexOf('{');
     if (jsonStart === -1) {
       throw new Error('未找到JSON对象开始标记');
@@ -433,12 +447,12 @@ function parseMultiFilesResponse(responseContent, files) {
     }
 
     jsonStr = jsonStr.substring(jsonStart, jsonEnd + 1);
-    
+
     // 修复JSON格式问题
     jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
-    
+
     const result = JSON.parse(jsonStr);
-    
+
     // 处理多文件响应
     if (result.files && Array.isArray(result.files)) {
       result.files.forEach(fileResult => {
@@ -639,7 +653,7 @@ ${truncatedDiff ? `\nGit Diff内容（仅显示变更部分）：\n\`\`\`\n${tru
   });
 
   // 构建规则编号范围提示
-  const ruleRangeText = enabledRules && enabledRules.length > 0 
+  const ruleRangeText = enabledRules && enabledRules.length > 0
     ? `规则编号（${enabledRules.join(', ')}）`
     : '规则编号';
 
@@ -1122,6 +1136,6 @@ function parseAIResponse(responseContent, filePath, fileContent) {
 
 
 module.exports = {
-  validateWithAI
+  validateWithAI,
+  getAIConfig
 };
-
